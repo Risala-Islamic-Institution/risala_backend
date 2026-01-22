@@ -51,7 +51,7 @@ services:
       - '0.0.0.0:5555:5555'
 
   redis:
-    image: docker.io/redis:7.2
+    image: docker.io/redis:8.4
     
     volumes:
       - production_redis_data:/data
