@@ -1,83 +1,296 @@
-from django.contrib.auth.models import AbstractUser
+"""
+Risala User and Profile Models
+Following the official Risala_doc class diagram and ER diagram.
+"""
+from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.db import models
-from django.db.models import CharField, TextChoices
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+from django.utils import timezone
 
 from risala_backend.utils.models import TimeStampedModel, UUIDModel
+from risala_backend.users.managers import UserManager
 
 
-class User(AbstractUser, TimeStampedModel, UUIDModel):
-    """
-    Default custom user model for Risala_Backend.
-    If adding fields that need to be filled at user signup,
-    check forms.SignupForm and forms.SocialSignupForms accordingly.
-    """
-    class Role(TextChoices):
-        ADMIN = "ADMIN", _("Admin")
-        STUDENT = "STUDENT", _("Student")
-        INSTRUCTOR = "INSTRUCTOR", _("Instructor")
-        SUPPORT = "SUPPORT", _("Support")
-        FINANCE = "FINANCE", _("Finance")
+# =============================================================================
+# 1. IDENTITY & ACCESS CONTROL DOMAIN
+# =============================================================================
 
-    # First and last name do not cover name patterns around the globe
-    name = CharField(_("Name of User"), blank=True, max_length=255)
-    first_name = None  # type: ignore[assignment]
-    last_name = None  # type: ignore[assignment]
+class Permission(TimeStampedModel, UUIDModel):
+    """Fine-grained access control permissions."""
     
-    role = CharField(
-        max_length=50, 
-        choices=Role.choices, 
-        default=Role.STUDENT
+    class Scope(models.TextChoices):
+        SYSTEM = "SYSTEM", _("System")
+        COURSE = "COURSE", _("Course")
+        SESSION = "SESSION", _("Session")
+    
+    code = models.CharField(max_length=100, unique=True, help_text="e.g., CREATE_SESSION")
+    description = models.TextField(blank=True)
+    scope = models.CharField(max_length=20, choices=Scope.choices, default=Scope.SYSTEM)
+    
+    class Meta:
+        ordering = ["code"]
+    
+    def __str__(self):
+        return self.code
+
+
+class Role(TimeStampedModel, UUIDModel):
+    """System-level authority roles."""
+    
+    class RoleName(models.TextChoices):
+        ADMIN = "ADMIN", _("Admin")
+        USTAZ = "USTAZ", _("Ustaz")  # Teacher
+        STUDENT = "STUDENT", _("Student")
+        FINANCE = "FINANCE", _("Finance")
+        SUPPORT = "SUPPORT", _("Support")
+    
+    name = models.CharField(max_length=50, choices=RoleName.choices, unique=True)
+    description = models.TextField(blank=True)
+    permissions = models.ManyToManyField(
+        Permission,
+        through="RolePermission",
+        related_name="roles",
+        blank=True,
     )
+    
+    class Meta:
+        ordering = ["name"]
+    
+    def __str__(self):
+        return self.get_name_display()
 
+
+class RolePermission(TimeStampedModel, UUIDModel):
+    """Junction table for Role-Permission Many-to-Many relationship."""
+    role = models.ForeignKey(Role, on_delete=models.CASCADE)
+    permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+    
+    class Meta:
+        unique_together = ("role", "permission")
+    
+    def __str__(self):
+        return f"{self.role.name} - {self.permission.code}"
+
+
+class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel, UUIDModel):
+    """
+    Custom User model for Risala platform.
+    Based on the official Risala_doc class diagram.
+    """
+    
+    class Gender(models.TextChoices):
+        MALE = "MALE", _("Male")
+        FEMALE = "FEMALE", _("Female")
+        OTHER = "OTHER", _("Other")
+    
+    # Core identity fields
+    username = models.CharField(max_length=150, unique=True)
+    email = models.EmailField(_("Email Address"), unique=True)
+    full_name = models.CharField(_("Full Name"), max_length=255, blank=True)
+    phone_number = models.CharField(max_length=20, blank=True, null=True)
+    
+    # Personal information
+    gender = models.CharField(max_length=10, choices=Gender.choices, blank=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+    country = models.CharField(max_length=100, blank=True)
+    user_timezone = models.CharField(max_length=50, default="UTC")
+    preferred_language = models.CharField(max_length=10, default="en")
+    
+    # Account status
+    is_active = models.BooleanField(default=True)
+    is_staff = models.BooleanField(default=False)
+    is_suspended = models.BooleanField(default=False)
+    suspension_reason = models.TextField(blank=True)
+    
+    # Timestamps
+    last_login_at = models.DateTimeField(null=True, blank=True)
+    date_joined = models.DateTimeField(default=timezone.now)
+    
+    # Many-to-Many relationship with Role
+    roles = models.ManyToManyField(
+        Role,
+        through="users.UserRole",
+        through_fields=("user", "role"),
+        related_name="users",
+        blank=True,
+    )
+    
+    objects = UserManager()
+    
+    USERNAME_FIELD = "email"
+    REQUIRED_FIELDS = ["username"]
+    
+    class Meta:
+        ordering = ["-created_at"]
+    
+    def __str__(self):
+        return self.email
+    
     def get_absolute_url(self) -> str:
-        """Get URL for user's detail view.
-
-        Returns:
-            str: URL for user detail.
-
-        """
+        """Get URL for user's detail view."""
         return reverse("users:detail", kwargs={"username": self.username})
+    
+    def has_role(self, role_name: str) -> bool:
+        """Check if user has a specific role."""
+        return self.roles.filter(name=role_name).exists()
+    
+    def get_primary_role(self):
+        """Get the user's primary (first) role."""
+        return self.roles.first()
+
+
+class UserRole(TimeStampedModel, UUIDModel):
+    """Junction table for User-Role Many-to-Many relationship."""
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    role = models.ForeignKey(Role, on_delete=models.CASCADE)
+    assigned_at = models.DateTimeField(auto_now_add=True)
+    assigned_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="role_assignments_made",
+    )
+    
+    class Meta:
+        unique_together = ("user", "role")
+    
+    def __str__(self):
+        return f"{self.user.email} - {self.role.name}"
+
+
+# =============================================================================
+# 2. PROFILE DOMAIN (Composition, NOT Inheritance)
+# =============================================================================
+
+class TeacherProfile(TimeStampedModel, UUIDModel):
+    """
+    Profile for Teachers (Ustaz/Ustazah).
+    Extends User through composition, NOT inheritance.
+    """
+    
+    class TeachingLevel(models.TextChoices):
+        BEGINNER = "BEGINNER", _("Beginner")
+        INTERMEDIATE = "INTERMEDIATE", _("Intermediate")
+        ADVANCED = "ADVANCED", _("Advanced")
+    
+    class Specialization(models.TextChoices):
+        TAJWEED = "TAJWEED", _("Tajweed")
+        HIFZ = "HIFZ", _("Hifz (Memorization)")
+        TAFSIR = "TAFSIR", _("Tafsir")
+        ARABIC = "ARABIC", _("Arabic Language")
+        FIQH = "FIQH", _("Fiqh")
+        AQEEDAH = "AQEEDAH", _("Aqeedah")
+    
+    class VerificationStatus(models.TextChoices):
+        PENDING = "PENDING", _("Pending")
+        VERIFIED = "VERIFIED", _("Verified")
+        REJECTED = "REJECTED", _("Rejected")
+    
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="teacher_profile",
+    )
+    biography = models.TextField(blank=True)
+    qualifications = models.TextField(blank=True)
+    years_of_experience = models.PositiveIntegerField(default=0)
+    teaching_languages = models.JSONField(default=list, blank=True)  # ["Arabic", "English"]
+    teaching_level = models.CharField(
+        max_length=20,
+        choices=TeachingLevel.choices,
+        default=TeachingLevel.BEGINNER,
+    )
+    specialization = models.CharField(
+        max_length=20,
+        choices=Specialization.choices,
+        blank=True,
+    )
+    hourly_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    rating_average = models.DecimalField(max_digits=3, decimal_places=2, default=0.00)
+    total_students = models.PositiveIntegerField(default=0)
+    verification_status = models.CharField(
+        max_length=20,
+        choices=VerificationStatus.choices,
+        default=VerificationStatus.PENDING,
+    )
+    verified_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="verified_teachers",
+    )
+    verified_at = models.DateTimeField(null=True, blank=True)
+    profile_visibility = models.BooleanField(default=True)
+    
+    class Meta:
+        verbose_name = "Teacher Profile"
+        verbose_name_plural = "Teacher Profiles"
+    
+    def __str__(self):
+        return f"Teacher: {self.user.full_name or self.user.username}"
 
 
 class StudentProfile(TimeStampedModel, UUIDModel):
-    """Profile for learners/students."""
+    """
+    Profile for Students/Learners.
+    Extends User through composition, NOT inheritance.
+    """
+    
+    class CurrentLevel(models.TextChoices):
+        BEGINNER = "BEGINNER", _("Beginner")
+        INTERMEDIATE = "INTERMEDIATE", _("Intermediate")
+        ADVANCED = "ADVANCED", _("Advanced")
+    
+    class EnrollmentStatus(models.TextChoices):
+        ACTIVE = "ACTIVE", _("Active")
+        INACTIVE = "INACTIVE", _("Inactive")
+        SUSPENDED = "SUSPENDED", _("Suspended")
+    
     user = models.OneToOneField(
-        User, 
-        on_delete=models.CASCADE, 
-        related_name="student_profile"
+        User,
+        on_delete=models.CASCADE,
+        related_name="student_profile",
     )
-    bio = models.TextField(blank=True, default="")
-    learning_goals = models.TextField(blank=True, default="")
-
-    def __str__(self):
-        return f"StudentProfile: {self.user.username}"
-
-
-class InstructorProfile(TimeStampedModel, UUIDModel):
-    """Profile for instructors/teachers."""
-    user = models.OneToOneField(
-        User, 
-        on_delete=models.CASCADE, 
-        related_name="instructor_profile"
+    learning_goals = models.TextField(blank=True)
+    current_level = models.CharField(
+        max_length=20,
+        choices=CurrentLevel.choices,
+        default=CurrentLevel.BEGINNER,
     )
-    bio = models.TextField(blank=True, default="")
-    qualifications = models.TextField(blank=True, default="")
-    expertise = models.CharField(max_length=255, blank=True, default="")
-
+    preferred_schedule = models.TextField(blank=True)
+    guardian_contact = models.CharField(max_length=100, blank=True, null=True)
+    enrollment_status = models.CharField(
+        max_length=20,
+        choices=EnrollmentStatus.choices,
+        default=EnrollmentStatus.ACTIVE,
+    )
+    joined_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        verbose_name = "Student Profile"
+        verbose_name_plural = "Student Profiles"
+    
     def __str__(self):
-        return f"InstructorProfile: {self.user.username}"
+        return f"Student: {self.user.full_name or self.user.username}"
 
 
-@receiver(post_save, sender=User)
-def create_user_profile(sender, instance, created, **kwargs):
-    """Auto-create profile based on user role."""
+# =============================================================================
+# SIGNALS - Auto-create profiles based on role assignment
+# =============================================================================
+
+@receiver(post_save, sender=UserRole)
+def create_profile_on_role_assignment(sender, instance, created, **kwargs):
+    """Auto-create profile when a role is assigned to a user."""
     if created:
-        if instance.role == User.Role.STUDENT:
-            StudentProfile.objects.create(user=instance)
-        elif instance.role == User.Role.INSTRUCTOR:
-            InstructorProfile.objects.create(user=instance)
-
+        user = instance.user
+        role_name = instance.role.name
+        
+        if role_name == Role.RoleName.USTAZ:
+            TeacherProfile.objects.get_or_create(user=user)
+        elif role_name == Role.RoleName.STUDENT:
+            StudentProfile.objects.get_or_create(user=user)

@@ -90,3 +90,28 @@ CELERY_TASK_EAGER_PROPAGATES = True
 WEBPACK_LOADER["DEFAULT"]["CACHE"] = not DEBUG
 # Your stuff...
 # ------------------------------------------------------------------------------
+
+# CORS - Allow frontend to access API
+# ------------------------------------------------------------------------------
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3333",
+    "http://127.0.0.1:3333",
+    "http://localhost:3000",
+]
+CORS_ALLOW_CREDENTIALS = True
+
+# Disable mandatory email verification for local development
+# ------------------------------------------------------------------------------
+ACCOUNT_EMAIL_VERIFICATION = "none"
+
+# dj-rest-auth configuration
+# ------------------------------------------------------------------------------
+REST_AUTH = {
+    "USE_JWT": False,  # Using Token auth for simplicity
+    "TOKEN_MODEL": "rest_framework.authtoken.models.Token",
+    "REGISTER_SERIALIZER": "risala_backend.users.api.serializers.CustomRegisterSerializer",
+    "LOGIN_SERIALIZER": "risala_backend.users.api.serializers.CustomLoginSerializer",
+    "USER_DETAILS_SERIALIZER": "risala_backend.users.api.serializers.UserSerializer",
+}
+
+

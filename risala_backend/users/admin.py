@@ -1,40 +1,78 @@
-from allauth.account.decorators import secure_admin_login
-from django.conf import settings
+"""
+Django Admin configuration for User and Profile models.
+"""
 from django.contrib import admin
-from django.contrib.auth import admin as auth_admin
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.utils.translation import gettext_lazy as _
 
-from .forms import UserAdminChangeForm
-from .forms import UserAdminCreationForm
-from .models import User
+from .models import (
+    User,
+    Role,
+    Permission,
+    RolePermission,
+    UserRole,
+    TeacherProfile,
+    StudentProfile,
+)
 
-if settings.DJANGO_ADMIN_FORCE_ALLAUTH:
-    # Force the `admin` sign in process to go through the `django-allauth` workflow:
-    # https://docs.allauth.org/en/latest/common/admin.html#admin
-    admin.autodiscover()
-    admin.site.login = secure_admin_login(admin.site.login)  # type: ignore[method-assign]
+
+class UserRoleInline(admin.TabularInline):
+    model = UserRole
+    extra = 1
+    fk_name = "user"
+    autocomplete_fields = ["role"]
 
 
 @admin.register(User)
-class UserAdmin(auth_admin.UserAdmin):
-    form = UserAdminChangeForm
-    add_form = UserAdminCreationForm
+class UserAdmin(BaseUserAdmin):
+    list_display = ["email", "username", "full_name", "is_active", "is_staff", "created_at"]
+    list_filter = ["is_active", "is_staff", "is_superuser", "is_suspended"]
+    search_fields = ["email", "username", "full_name"]
+    ordering = ["-created_at"]
+    inlines = [UserRoleInline]
+    
     fieldsets = (
-        (None, {"fields": ("username", "password")}),
-        (_("Personal info"), {"fields": ("name", "email")}),
-        (
-            _("Permissions"),
-            {
-                "fields": (
-                    "is_active",
-                    "is_staff",
-                    "is_superuser",
-                    "groups",
-                    "user_permissions",
-                ),
-            },
-        ),
-        (_("Important dates"), {"fields": ("last_login", "date_joined")}),
+        (None, {"fields": ("email", "username", "password")}),
+        (_("Personal Info"), {"fields": ("full_name", "phone_number", "gender", "date_of_birth", "country")}),
+        # Field is named user_timezone in the model; keep admin aligned to avoid FieldError.
+        (_("Preferences"), {"fields": ("user_timezone", "preferred_language")}),
+        (_("Status"), {"fields": ("is_active", "is_staff", "is_superuser", "is_suspended", "suspension_reason")}),
+        (_("Important dates"), {"fields": ("last_login", "date_joined", "last_login_at")}),
     )
-    list_display = ["username", "name", "is_superuser"]
+    
+    add_fieldsets = (
+        (None, {
+            "classes": ("wide",),
+            "fields": ("email", "username", "password1", "password2"),
+        }),
+    )
+
+
+@admin.register(Role)
+class RoleAdmin(admin.ModelAdmin):
+    list_display = ["name", "description", "created_at"]
     search_fields = ["name"]
+
+
+
+@admin.register(Permission)
+class PermissionAdmin(admin.ModelAdmin):
+    list_display = ["code", "scope", "description"]
+    list_filter = ["scope"]
+    search_fields = ["code", "description"]
+
+
+@admin.register(TeacherProfile)
+class TeacherProfileAdmin(admin.ModelAdmin):
+    list_display = ["user", "specialization", "verification_status", "hourly_rate", "rating_average"]
+    list_filter = ["verification_status", "specialization", "teaching_level"]
+    search_fields = ["user__email", "user__full_name"]
+    raw_id_fields = ["user", "verified_by"]
+
+
+@admin.register(StudentProfile)
+class StudentProfileAdmin(admin.ModelAdmin):
+    list_display = ["user", "current_level", "enrollment_status", "joined_at"]
+    list_filter = ["current_level", "enrollment_status"]
+    search_fields = ["user__email", "user__full_name"]
+    raw_id_fields = ["user"]
