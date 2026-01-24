@@ -5,6 +5,7 @@ from rest_framework import serializers
 from dj_rest_auth.registration.serializers import RegisterSerializer
 from dj_rest_auth.serializers import LoginSerializer
 from rest_framework import serializers as drf_serializers
+from django.db import IntegrityError
 
 from risala_backend.users.models import (
     User,
@@ -12,6 +13,8 @@ from risala_backend.users.models import (
     UserRole,
     TeacherProfile,
     StudentProfile,
+    TeacherAvailability,
+    SessionBooking,
 )
 
 
@@ -166,3 +169,107 @@ class CustomLoginSerializer(LoginSerializer):
         if email and not username:
             attrs[self.username_field] = email
         return super().validate(attrs)
+
+
+class TeacherAvailabilitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TeacherAvailability
+        fields = [
+            "id",
+            "teacher",
+            "day_of_week",
+            "start_time",
+            "end_time",
+            "timezone",
+            "is_active",
+            "created_at",
+        ]
+        read_only_fields = ["id", "teacher", "created_at"]
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        teacher_profile = getattr(request.user, "teacher_profile", None) if request else None
+
+        # Derive teacher and current values for both create and update flows
+        teacher = self.instance.teacher if self.instance else teacher_profile
+        day_of_week = attrs.get("day_of_week", getattr(self.instance, "day_of_week", None))
+        start_time = attrs.get("start_time", getattr(self.instance, "start_time", None))
+        end_time = attrs.get("end_time", getattr(self.instance, "end_time", None))
+        timezone = attrs.get("timezone", getattr(self.instance, "timezone", "UTC"))
+
+        if not teacher:
+            raise serializers.ValidationError("Only teachers can create availability.")
+
+        if start_time and end_time and end_time <= start_time:
+            raise serializers.ValidationError("end_time must be after start_time.")
+
+        if day_of_week is not None and start_time and end_time:
+            duplicate_qs = TeacherAvailability.objects.filter(
+                teacher=teacher,
+                day_of_week=day_of_week,
+                start_time=start_time,
+                end_time=end_time,
+                timezone=timezone,
+            )
+            if self.instance:
+                duplicate_qs = duplicate_qs.exclude(id=self.instance.id)
+            if duplicate_qs.exists():
+                raise serializers.ValidationError(
+                    "This availability block already exists for the selected day/time/timezone."
+                )
+
+        # Preserve teacher for create flow
+        attrs["teacher"] = teacher
+        return attrs
+
+    def create(self, validated_data):
+        try:
+            return super().create(validated_data)
+        except IntegrityError:
+            raise serializers.ValidationError(
+                "This availability block already exists for the selected day/time/timezone."
+            )
+
+
+class SessionBookingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SessionBooking
+        fields = [
+            "id",
+            "teacher",
+            "student",
+            "start_at",
+            "end_at",
+            "status",
+            "created_at",
+        ]
+        read_only_fields = ["id", "student", "status", "created_at"]
+
+    def validate(self, attrs):
+        start_at = attrs.get("start_at")
+        end_at = attrs.get("end_at")
+        teacher = attrs.get("teacher")
+        if not (start_at and end_at and teacher):
+            raise serializers.ValidationError("teacher, start_at and end_at are required.")
+        if end_at <= start_at:
+            raise serializers.ValidationError("end_at must be after start_at.")
+        # Prevent overlap with existing bookings
+        overlaps = SessionBooking.objects.filter(
+            teacher=teacher,
+            status__in=[SessionBooking.Status.PENDING, SessionBooking.Status.CONFIRMED],
+            start_at__lt=end_at,
+            end_at__gt=start_at,
+        ).exists()
+        if overlaps:
+            raise serializers.ValidationError("Selected time overlaps with an existing booking.")
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        student_profile = getattr(request.user, "student_profile", None)
+        if not student_profile:
+            raise serializers.ValidationError("Only students can create bookings.")
+        validated_data["student"] = student_profile
+        # Default to PENDING; confirmation could be a follow-up action
+        validated_data.setdefault("status", SessionBooking.Status.PENDING)
+        return super().create(validated_data)

@@ -13,6 +13,8 @@ from .models import (
     UserRole,
     TeacherProfile,
     StudentProfile,
+    TeacherAvailability,
+    SessionBooking,
 )
 
 
@@ -76,3 +78,15 @@ class StudentProfileAdmin(admin.ModelAdmin):
     list_filter = ["current_level", "enrollment_status"]
     search_fields = ["user__email", "user__full_name"]
     raw_id_fields = ["user"]
+
+
+@admin.register(TeacherAvailability)
+class TeacherAvailabilityAdmin(admin.ModelAdmin):
+    list_display = ("teacher", "day_of_week", "start_time", "end_time", "timezone", "is_active")
+    list_filter = ("teacher", "day_of_week", "timezone", "is_active")
+
+
+@admin.register(SessionBooking)
+class SessionBookingAdmin(admin.ModelAdmin):
+    list_display = ("teacher", "student", "start_at", "end_at", "status")
+    list_filter = ("teacher", "student", "status")

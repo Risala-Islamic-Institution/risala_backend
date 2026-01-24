@@ -294,3 +294,74 @@ def create_profile_on_role_assignment(sender, instance, created, **kwargs):
             TeacherProfile.objects.get_or_create(user=user)
         elif role_name == Role.RoleName.STUDENT:
             StudentProfile.objects.get_or_create(user=user)
+
+
+# =============================================================================
+# 3. SCHEDULING & BOOKINGS DOMAIN
+# =============================================================================
+
+class TeacherAvailability(TimeStampedModel, UUIDModel):
+    """Recurring weekly availability for a teacher in their timezone."""
+
+    class WeekDay(models.IntegerChoices):
+        MONDAY = 0, _("Monday")
+        TUESDAY = 1, _("Tuesday")
+        WEDNESDAY = 2, _("Wednesday")
+        THURSDAY = 3, _("Thursday")
+        FRIDAY = 4, _("Friday")
+        SATURDAY = 5, _("Saturday")
+        SUNDAY = 6, _("Sunday")
+
+    teacher = models.ForeignKey(
+        TeacherProfile,
+        on_delete=models.CASCADE,
+        related_name="availabilities",
+    )
+    day_of_week = models.IntegerField(choices=WeekDay.choices)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    timezone = models.CharField(max_length=50, default="UTC")
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["teacher", "day_of_week", "start_time"]
+        unique_together = ("teacher", "day_of_week", "start_time", "end_time", "timezone")
+
+    def __str__(self):
+        return f"{self.teacher} - {self.get_day_of_week_display()} {self.start_time}-{self.end_time} ({self.timezone})"
+
+
+class SessionBooking(TimeStampedModel, UUIDModel):
+    """A booked session between a student and a teacher."""
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", _("Pending")
+        CONFIRMED = "CONFIRMED", _("Confirmed")
+        CANCELLED = "CANCELLED", _("Cancelled")
+
+    teacher = models.ForeignKey(
+        TeacherProfile,
+        on_delete=models.CASCADE,
+        related_name="session_bookings",
+    )
+    student = models.ForeignKey(
+        StudentProfile,
+        on_delete=models.CASCADE,
+        related_name="session_bookings",
+    )
+    start_at = models.DateTimeField()
+    end_at = models.DateTimeField()
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+
+    class Meta:
+        ordering = ["start_at"]
+        indexes = [
+            models.Index(fields=["teacher", "start_at", "end_at"]),
+            models.Index(fields=["student", "start_at", "end_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.teacher} -> {self.student} @ {self.start_at}"
+
+    def overlaps(self, other_start, other_end) -> bool:
+        return not (self.end_at <= other_start or self.start_at >= other_end)
