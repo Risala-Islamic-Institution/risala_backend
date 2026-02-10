@@ -365,3 +365,29 @@ class SessionBooking(TimeStampedModel, UUIDModel):
 
     def overlaps(self, other_start, other_end) -> bool:
         return not (self.end_at <= other_start or self.start_at >= other_end)
+
+
+class Notification(TimeStampedModel, UUIDModel):
+    """User-facing notification entry (booking lifecycle, etc.)."""
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="notifications",
+    )
+    title = models.CharField(max_length=150)
+    body = models.TextField(blank=True)
+    related_booking = models.ForeignKey(
+        SessionBooking,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="notifications",
+    )
+    is_read = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.title

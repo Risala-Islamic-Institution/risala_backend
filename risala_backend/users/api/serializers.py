@@ -6,6 +6,7 @@ from dj_rest_auth.registration.serializers import RegisterSerializer
 from dj_rest_auth.serializers import LoginSerializer
 from rest_framework import serializers as drf_serializers
 from django.db import IntegrityError
+from risala_backend.users.models import Notification
 
 from risala_backend.users.models import (
     User,
@@ -232,6 +233,9 @@ class TeacherAvailabilitySerializer(serializers.ModelSerializer):
 
 
 class SessionBookingSerializer(serializers.ModelSerializer):
+    teacher_name = serializers.SerializerMethodField()
+    student_name = serializers.SerializerMethodField()
+
     class Meta:
         model = SessionBooking
         fields = [
@@ -242,8 +246,18 @@ class SessionBookingSerializer(serializers.ModelSerializer):
             "end_at",
             "status",
             "created_at",
+            "teacher_name",
+            "student_name",
         ]
         read_only_fields = ["id", "student", "status", "created_at"]
+
+    def get_teacher_name(self, obj):
+        teacher_user = getattr(obj.teacher, "user", None)
+        return teacher_user.full_name or teacher_user.username if teacher_user else None
+
+    def get_student_name(self, obj):
+        student_user = getattr(obj.student, "user", None)
+        return student_user.full_name or student_user.username if student_user else None
 
     def validate(self, attrs):
         start_at = attrs.get("start_at")
@@ -272,4 +286,27 @@ class SessionBookingSerializer(serializers.ModelSerializer):
         validated_data["student"] = student_profile
         # Default to PENDING; confirmation could be a follow-up action
         validated_data.setdefault("status", SessionBooking.Status.PENDING)
-        return super().create(validated_data)
+        booking = super().create(validated_data)
+        teacher_user = getattr(booking.teacher, "user", None)
+        if teacher_user:
+            Notification.objects.create(
+                user=teacher_user,
+                title="New booking request",
+                body=f"A student requested a session on {booking.start_at}.",
+                related_booking=booking,
+            )
+        return booking
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = [
+            "id",
+            "title",
+            "body",
+            "is_read",
+            "created_at",
+            "related_booking",
+        ]
+        read_only_fields = ["id", "created_at", "related_booking"]

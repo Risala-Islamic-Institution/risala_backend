@@ -11,8 +11,9 @@ from rest_framework import viewsets
 from rest_framework.decorators import action
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from django.utils import timezone
 
-from risala_backend.users.models import User, TeacherProfile, StudentProfile, TeacherAvailability, SessionBooking
+from risala_backend.users.models import User, TeacherProfile, StudentProfile, TeacherAvailability, SessionBooking, Notification
 
 from .serializers import (
     UserSerializer,
@@ -20,6 +21,7 @@ from .serializers import (
     StudentProfileSerializer,
     TeacherAvailabilitySerializer,
     SessionBookingSerializer,
+    NotificationSerializer,
 )
 
 
@@ -160,7 +162,103 @@ class SessionBookingViewSet(CreateModelMixin, ListModelMixin, UpdateModelMixin, 
     def get_queryset(self):
         user = self.request.user
         if hasattr(user, "student_profile"):
-            return SessionBooking.objects.filter(student=user.student_profile)
+            return SessionBooking.objects.filter(student=user.student_profile).order_by("start_at")
         if hasattr(user, "teacher_profile"):
-            return SessionBooking.objects.filter(teacher=user.teacher_profile)
+            return SessionBooking.objects.filter(teacher=user.teacher_profile).order_by("start_at")
         return SessionBooking.objects.none()
+
+    @action(detail=True, methods=["post"], url_path="cancel")
+    def cancel(self, request, pk=None):
+        booking = self.get_object()
+
+        # Only the owning student can cancel
+        if not hasattr(request.user, "student_profile") or booking.student != request.user.student_profile:
+            return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+
+        if booking.status == SessionBooking.Status.CANCELLED:
+            return Response({"detail": "Booking already cancelled."}, status=status.HTTP_200_OK)
+
+        if booking.start_at <= timezone.now():
+            return Response({"detail": "Cannot cancel a booking that has started or passed."}, status=status.HTTP_400_BAD_REQUEST)
+
+        booking.status = SessionBooking.Status.CANCELLED
+        booking.save(update_fields=["status", "updated_at"])
+        teacher_user = getattr(booking.teacher, "user", None)
+        if teacher_user:
+            Notification.objects.create(
+                user=teacher_user,
+                title="Booking cancelled",
+                body=f"A booking on {booking.start_at} was cancelled by the student.",
+                related_booking=booking,
+            )
+        serializer = self.get_serializer(booking)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="confirm")
+    def confirm(self, request, pk=None):
+        booking = self.get_object()
+        teacher_profile = getattr(request.user, "teacher_profile", None)
+
+        if not teacher_profile or booking.teacher != teacher_profile:
+            return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+
+        if booking.status == SessionBooking.Status.CANCELLED:
+            return Response({"detail": "Booking already cancelled."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if booking.status == SessionBooking.Status.CONFIRMED:
+            serializer = self.get_serializer(booking)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        booking.status = SessionBooking.Status.CONFIRMED
+        booking.save(update_fields=["status", "updated_at"])
+        student_user = getattr(booking.student, "user", None)
+        if student_user:
+            Notification.objects.create(
+                user=student_user,
+                title="Booking confirmed",
+                body=f"Your booking on {booking.start_at} was confirmed by the teacher.",
+                related_booking=booking,
+            )
+        serializer = self.get_serializer(booking)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="decline")
+    def decline(self, request, pk=None):
+        booking = self.get_object()
+        teacher_profile = getattr(request.user, "teacher_profile", None)
+
+        if not teacher_profile or booking.teacher != teacher_profile:
+            return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+
+        if booking.status == SessionBooking.Status.CANCELLED:
+            return Response({"detail": "Booking already cancelled."}, status=status.HTTP_400_BAD_REQUEST)
+
+        booking.status = SessionBooking.Status.CANCELLED
+        booking.save(update_fields=["status", "updated_at"])
+        student_user = getattr(booking.student, "user", None)
+        if student_user:
+            Notification.objects.create(
+                user=student_user,
+                title="Booking declined",
+                body=f"Your booking on {booking.start_at} was declined by the teacher.",
+                related_booking=booking,
+            )
+        serializer = self.get_serializer(booking)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class NotificationViewSet(ListModelMixin, UpdateModelMixin, GenericViewSet):
+    serializer_class = NotificationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Notification.objects.filter(user=self.request.user).order_by("-created_at")
+
+    @action(detail=True, methods=["post"], url_path="read")
+    def mark_read(self, request, pk=None):
+        notification = self.get_object()
+        if not notification.is_read:
+            notification.is_read = True
+            notification.save(update_fields=["is_read", "updated_at"])
+        serializer = self.get_serializer(notification)
+        return Response(serializer.data, status=status.HTTP_200_OK)
