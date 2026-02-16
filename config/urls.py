@@ -10,6 +10,7 @@ from drf_spectacular.views import SpectacularAPIView
 from drf_spectacular.views import SpectacularSwaggerView
 from rest_framework.authtoken.views import obtain_auth_token
 
+
 urlpatterns = [
     path("", TemplateView.as_view(template_name="pages/home.html"), name="home"),
     path(
@@ -41,6 +42,7 @@ urlpatterns += [
     path("api/auth/", include("dj_rest_auth.urls")),
     # dj-rest-auth registration (requires allauth)
     path("api/auth/registration/", include("dj_rest_auth.registration.urls")),
+    path("api/payments/", include("risala_backend.payments.urls", namespace="payments")),
     path("api/schema/", SpectacularAPIView.as_view(), name="api-schema"),
     path(
         "api/docs/",

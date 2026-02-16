@@ -16,6 +16,7 @@ from risala_backend.users.models import (
     StudentProfile,
     TeacherAvailability,
     SessionBooking,
+    BookingOrder,
 )
 
 
@@ -245,11 +246,19 @@ class SessionBookingSerializer(serializers.ModelSerializer):
             "start_at",
             "end_at",
             "status",
+            "hourly_rate",
             "created_at",
             "teacher_name",
+            "teacher_name",
             "student_name",
+            "order",
         ]
-        read_only_fields = ["id", "student", "status", "created_at"]
+        read_only_fields = [
+            "id",
+            "student",
+            "status",
+            "created_at",
+        ]
 
     def get_teacher_name(self, obj):
         teacher_user = getattr(obj.teacher, "user", None)
@@ -270,7 +279,12 @@ class SessionBookingSerializer(serializers.ModelSerializer):
         # Prevent overlap with existing bookings
         overlaps = SessionBooking.objects.filter(
             teacher=teacher,
-            status__in=[SessionBooking.Status.PENDING, SessionBooking.Status.CONFIRMED],
+            status__in=[
+                SessionBooking.Status.PENDING,
+                SessionBooking.Status.REQUESTED,
+                SessionBooking.Status.APPROVED,
+                SessionBooking.Status.CONFIRMED,
+            ],
             start_at__lt=end_at,
             end_at__gt=start_at,
         ).exists()
@@ -284,8 +298,8 @@ class SessionBookingSerializer(serializers.ModelSerializer):
         if not student_profile:
             raise serializers.ValidationError("Only students can create bookings.")
         validated_data["student"] = student_profile
-        # Default to PENDING; confirmation could be a follow-up action
-        validated_data.setdefault("status", SessionBooking.Status.PENDING)
+        # Default to requested; teacher approval is required before confirmation.
+        validated_data.setdefault("status", SessionBooking.Status.REQUESTED)
         booking = super().create(validated_data)
         teacher_user = getattr(booking.teacher, "user", None)
         if teacher_user:
@@ -296,6 +310,43 @@ class SessionBookingSerializer(serializers.ModelSerializer):
                 related_booking=booking,
             )
         return booking
+
+
+class BookingOrderSerializer(serializers.ModelSerializer):
+    """Serializer for BookingOrder (package)."""
+    class Meta:
+        model = BookingOrder
+        fields = [
+            "id",
+            "student",
+            "teacher",
+            "total_amount",
+            "currency",
+            "status",
+            "stripe_checkout_id",
+            "created_at",
+        ]
+        read_only_fields = ["id", "student", "status", "stripe_checkout_id", "created_at"]
+
+
+class WeeklySlotSerializer(serializers.Serializer):
+    day_of_week = serializers.IntegerField(min_value=0, max_value=6)
+    start_time = serializers.TimeField()
+    end_time = serializers.TimeField()
+
+
+class BookingPackageSerializer(serializers.Serializer):
+    """Serializer for creating a package of recurring bookings."""
+    teacher_id = serializers.UUIDField()
+    weekly_slots = WeeklySlotSerializer(many=True)
+    duration_weeks = serializers.IntegerField(min_value=1, max_value=52)
+    start_date = serializers.DateField(required=False)
+
+    def validate_start_date(self, value):
+        from django.utils import timezone
+        if value < timezone.now().date():
+            raise serializers.ValidationError("Start date cannot be in the past.")
+        return value
 
 
 class NotificationSerializer(serializers.ModelSerializer):

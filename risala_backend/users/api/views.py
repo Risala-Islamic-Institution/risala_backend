@@ -9,11 +9,13 @@ from rest_framework.viewsets import GenericViewSet
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import viewsets
 from rest_framework.decorators import action
-from datetime import datetime, timedelta
+from decimal import Decimal
+from datetime import datetime, timedelta, date
+from django.db import transaction
 from zoneinfo import ZoneInfo
 from django.utils import timezone
 
-from risala_backend.users.models import User, TeacherProfile, StudentProfile, TeacherAvailability, SessionBooking, Notification
+from risala_backend.users.models import User, TeacherProfile, StudentProfile, TeacherAvailability, SessionBooking, Notification, BookingOrder
 
 from .serializers import (
     UserSerializer,
@@ -22,6 +24,8 @@ from .serializers import (
     TeacherAvailabilitySerializer,
     SessionBookingSerializer,
     NotificationSerializer,
+    BookingOrderSerializer,
+    BookingPackageSerializer,
 )
 
 
@@ -122,7 +126,12 @@ class TeacherAvailabilityViewSet(CreateModelMixin, ListModelMixin, UpdateModelMi
         # Booked windows to exclude
         bookings = SessionBooking.objects.filter(
             teacher=teacher,
-            status__in=[SessionBooking.Status.PENDING, SessionBooking.Status.CONFIRMED]
+            status__in=[
+                SessionBooking.Status.PENDING,
+                SessionBooking.Status.REQUESTED,
+                SessionBooking.Status.APPROVED,
+                SessionBooking.Status.CONFIRMED,
+            ]
         )
 
         now = datetime.utcnow()
@@ -167,6 +176,12 @@ class SessionBookingViewSet(CreateModelMixin, ListModelMixin, UpdateModelMixin, 
             return SessionBooking.objects.filter(teacher=user.teacher_profile).order_by("start_at")
         return SessionBooking.objects.none()
 
+    def perform_create(self, serializer):
+        teacher = serializer.validated_data.get("teacher")
+        # Lock in the teacher's current hourly rate
+        hourly_rate = teacher.hourly_rate if teacher else 0.00
+        serializer.save(student=self.request.user.student_profile, hourly_rate=hourly_rate)
+
     @action(detail=True, methods=["post"], url_path="cancel")
     def cancel(self, request, pk=None):
         booking = self.get_object()
@@ -177,6 +192,9 @@ class SessionBookingViewSet(CreateModelMixin, ListModelMixin, UpdateModelMixin, 
 
         if booking.status == SessionBooking.Status.CANCELLED:
             return Response({"detail": "Booking already cancelled."}, status=status.HTTP_200_OK)
+
+        if booking.status == SessionBooking.Status.DECLINED:
+            return Response({"detail": "Booking already declined."}, status=status.HTTP_200_OK)
 
         if booking.start_at <= timezone.now():
             return Response({"detail": "Cannot cancel a booking that has started or passed."}, status=status.HTTP_400_BAD_REQUEST)
@@ -194,33 +212,191 @@ class SessionBookingViewSet(CreateModelMixin, ListModelMixin, UpdateModelMixin, 
         serializer = self.get_serializer(booking)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=["post"], url_path="confirm")
-    def confirm(self, request, pk=None):
+    @action(detail=False, methods=["post"], url_path="create-package")
+    def create_package(self, request):
+        """
+        Creates a package of multiple recurring sessions attached to a BookingOrder.
+        """
+        serializer = BookingPackageSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        teacher_id = data["teacher_id"]
+        weekly_slots = data["weekly_slots"]
+        duration_weeks = data["duration_weeks"]
+        start_date = data.get("start_date") or timezone.now().date()
+
+        try:
+            teacher = TeacherProfile.objects.get(id=teacher_id)
+        except TeacherProfile.DoesNotExist:
+            return Response({"error": "Teacher not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if not hasattr(request.user, "student_profile"):
+            return Response({"error": "Only students can book packages"}, status=status.HTTP_403_FORBIDDEN)
+        
+        student = request.user.student_profile
+        hourly_rate = teacher.hourly_rate or Decimal("10.00")
+        if hourly_rate <= 0:
+            hourly_rate = Decimal("10.00")
+        
+        potential_bookings = []
+        total_hours = Decimal("0.00")
+
+        # Generate all potential sessions
+        for week_idx in range(duration_weeks):
+            week_start = start_date + timedelta(weeks=week_idx)
+            for slot in weekly_slots:
+                day_offset = (slot["day_of_week"] - week_start.weekday()) % 7
+                session_date = week_start + timedelta(days=day_offset)
+                
+                start_dt = timezone.make_aware(datetime.combine(session_date, slot["start_time"]))
+                end_dt = timezone.make_aware(datetime.combine(session_date, slot["end_time"]))
+
+                # Validation 1: Must be in future
+                if start_dt <= timezone.now():
+                    continue
+
+                # Validation 2: Matches teacher availability
+                avail_exists = TeacherAvailability.objects.filter(
+                    teacher=teacher,
+                    day_of_week=slot["day_of_week"],
+                    start_time__lte=slot["start_time"],
+                    end_time__gte=slot["end_time"],
+                    is_active=True
+                ).exists()
+
+                if not avail_exists:
+                    return Response({
+                        "error": f"Teacher is not available on {session_date} {slot['start_time']}-{slot['end_time']}"
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+                # Validation 3: No overlaps with existing bookings
+                overlap = SessionBooking.objects.filter(
+                    teacher=teacher,
+                    status__in=[
+                        SessionBooking.Status.RESERVED,
+                        SessionBooking.Status.APPROVED,
+                        SessionBooking.Status.CONFIRMED
+                    ],
+                    start_at__lt=end_dt,
+                    end_at__gt=start_dt
+                ).exists()
+
+                if overlap:
+                    return Response({
+                        "error": f"Conflict detected on {session_date} {slot['start_time']}-{slot['end_time']}"
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+                duration = end_dt - start_dt
+                hours = Decimal(duration.total_seconds() / 3600)
+                total_hours += hours
+                
+                potential_bookings.append(SessionBooking(
+                    teacher=teacher,
+                    student=student,
+                    start_at=start_dt,
+                    end_at=end_dt,
+                    hourly_rate=hourly_rate,
+                    status=SessionBooking.Status.REQUESTED
+                ))
+
+        if not potential_bookings:
+            return Response({"error": "No valid slots found in the requested period."}, status=status.HTTP_400_BAD_REQUEST)
+
+        total_amount = max(total_hours * hourly_rate, Decimal("1.00"))
+
+        # Atomic Creation
+        with transaction.atomic():
+            order = BookingOrder.objects.create(
+                student=student,
+                teacher=teacher,
+                total_amount=total_amount,
+                currency="usd",
+                status=BookingOrder.Status.REQUESTED
+            )
+            for booking in potential_bookings:
+                booking.order = order
+                booking.save()
+
+        order_serializer = BookingOrderSerializer(order)
+        return Response(order_serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=["post"], url_path="approve-package")
+    def approve_package(self, request):
+        order_id = request.data.get("order_id")
+        if not order_id:
+            return Response({"error": "order_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            order = BookingOrder.objects.get(id=order_id)
+        except BookingOrder.DoesNotExist:
+            return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        teacher_profile = getattr(request.user, "teacher_profile", None)
+        if not teacher_profile or order.teacher != teacher_profile:
+            return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+
+        if order.status != BookingOrder.Status.REQUESTED:
+            return Response({"detail": "Only requested packages can be approved."}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            order.status = BookingOrder.Status.APPROVED
+            order.save()
+            # Update all bookings to APPROVED (or RESERVED/PENDING waiting for payment)
+            # Keeping them as REQUESTED or changing to APPROVED? 
+            # The flow is: Requested -> Approved -> Paid (Confirmed)
+            # Let's set bookings to APPROVED so they are distinct from initial requests.
+            order.bookings.update(status=SessionBooking.Status.APPROVED)
+
+            # Notify student
+            student_user = getattr(order.student, "user", None)
+            if student_user:
+                Notification.objects.create(
+                    user=student_user,
+                    title="Package Approved",
+                    body=f"Your package with {teacher_profile.user.full_name or teacher_profile.user.username} has been approved. Please proceed to payment.",
+                )
+
+        return Response(BookingOrderSerializer(order).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, pk=None):
         booking = self.get_object()
         teacher_profile = getattr(request.user, "teacher_profile", None)
 
         if not teacher_profile or booking.teacher != teacher_profile:
             return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
 
-        if booking.status == SessionBooking.Status.CANCELLED:
-            return Response({"detail": "Booking already cancelled."}, status=status.HTTP_400_BAD_REQUEST)
+        if booking.status in {SessionBooking.Status.CANCELLED, SessionBooking.Status.DECLINED, SessionBooking.Status.EXPIRED}:
+            return Response({"detail": "Booking is not available for approval."}, status=status.HTTP_400_BAD_REQUEST)
 
         if booking.status == SessionBooking.Status.CONFIRMED:
             serializer = self.get_serializer(booking)
             return Response(serializer.data, status=status.HTTP_200_OK)
 
-        booking.status = SessionBooking.Status.CONFIRMED
+        if booking.status not in {SessionBooking.Status.REQUESTED, SessionBooking.Status.PENDING}:
+            return Response({"detail": "Only requested bookings can be approved."}, status=status.HTTP_400_BAD_REQUEST)
+
+        booking.status = SessionBooking.Status.APPROVED
         booking.save(update_fields=["status", "updated_at"])
+
         student_user = getattr(booking.student, "user", None)
         if student_user:
             Notification.objects.create(
                 user=student_user,
-                title="Booking confirmed",
-                body=f"Your booking on {booking.start_at} was confirmed by the teacher.",
+                title="Booking approved",
+                body=f"Your booking on {booking.start_at} was approved.",
                 related_booking=booking,
             )
+
         serializer = self.get_serializer(booking)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="confirm")
+    def confirm(self, request, pk=None):
+        # Backward-compatible alias; approvals are handled here.
+        return self.approve(request, pk=pk)
 
     @action(detail=True, methods=["post"], url_path="decline")
     def decline(self, request, pk=None):
@@ -230,10 +406,10 @@ class SessionBookingViewSet(CreateModelMixin, ListModelMixin, UpdateModelMixin, 
         if not teacher_profile or booking.teacher != teacher_profile:
             return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
 
-        if booking.status == SessionBooking.Status.CANCELLED:
-            return Response({"detail": "Booking already cancelled."}, status=status.HTTP_400_BAD_REQUEST)
+        if booking.status in {SessionBooking.Status.CANCELLED, SessionBooking.Status.DECLINED}:
+            return Response({"detail": "Booking already closed."}, status=status.HTTP_400_BAD_REQUEST)
 
-        booking.status = SessionBooking.Status.CANCELLED
+        booking.status = SessionBooking.Status.DECLINED
         booking.save(update_fields=["status", "updated_at"])
         student_user = getattr(booking.student, "user", None)
         if student_user:

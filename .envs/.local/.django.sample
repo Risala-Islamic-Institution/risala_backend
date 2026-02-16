@@ -12,3 +12,14 @@ REDIS_URL=redis://redis:6379/0
 # Flower
 CELERY_FLOWER_USER=debug
 CELERY_FLOWER_PASSWORD=debug
+
+#Payments
+# ------------------------------------------------------------------------------
+PAYMENT_PROVIDER_DEFAULT=stripe
+PAYMENT_DEFAULT_CURRENCY=usd
+
+STRIPE_SECRET_KEY=sk_test_REPLACE_ME
+STRIPE_WEBHOOK_SECRET=whsec_REPLACE_ME
+
+STRIPE_SUCCESS_URL=http://localhost:3333/dashboard/student?session_id={CHECKOUT_SESSION_ID}
+STRIPE_CANCEL_URL=http://localhost:3333/dashboard/student?payment=cancelled

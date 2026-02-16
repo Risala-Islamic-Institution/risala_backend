@@ -277,4 +277,5 @@ risala_backend/static/webpack_bundles/
 webpack-stats.json
 .env
 .envs/*
-!.envs/.local/
+!.envs/.local/.django.sample
+!.envs/.local/.postgres

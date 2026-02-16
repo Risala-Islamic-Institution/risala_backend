@@ -391,6 +391,21 @@ wheels = [
 ]
 
 [[package]]
+name = "dj-rest-auth"
+version = "7.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "django" },
+    { name = "djangorestframework" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d1/07/3727a003d06251d2fe3694c4bcce9d0f22413453964018f387d878f9a00a/dj_rest_auth-7.0.2.tar.gz", hash = "sha256:e0ccbca6bcde9dd68fd1d8e868fdfb9d65d60b669f381b74feac2a3e7815466c", size = 169086, upload-time = "2026-01-09T10:37:27.671Z" }
+
+[package.optional-dependencies]
+with-social = [
+    { name = "django-allauth", extra = ["socialaccount"] },
+]
+
+[[package]]
 name = "django"
 version = "5.2.10"
 source = { registry = "https://pypi.org/simple" }
@@ -421,6 +436,11 @@ wheels = [
 mfa = [
     { name = "fido2" },
     { name = "qrcode" },
+]
+socialaccount = [
+    { name = "oauthlib" },
+    { name = "pyjwt", extra = ["crypto"] },
+    { name = "requests" },
 ]
 
 [[package]]
@@ -1113,6 +1133,15 @@ wheels = [
 ]
 
 [[package]]
+name = "oauthlib"
+version = "3.3.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0b/5f/19930f824ffeb0ad4372da4812c50edbd1434f678c90c2733e1188edfc63/oauthlib-3.3.1.tar.gz", hash = "sha256:0f0f8aa759826a193cf66c12ea1af1637f87b9b4622d46e866952bb022e538c9", size = 185918, upload-time = "2025-06-19T22:48:08.269Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/be/9c/92789c596b8df838baa98fa71844d84283302f7604ed565dafe5a6b5041a/oauthlib-3.3.1-py3-none-any.whl", hash = "sha256:88119c938d2b8fb88561af5f6ee0eec8cc8d552b7bb1f712743136eb7523b7a1", size = 160065, upload-time = "2025-06-19T22:48:06.508Z" },
+]
+
+[[package]]
 name = "packaging"
 version = "26.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1296,6 +1325,20 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b0/77/a5b8c569bf593b0140bde72ea885a803b82086995367bf2037de0159d924/pygments-2.19.2.tar.gz", hash = "sha256:636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887", size = 4968631, upload-time = "2025-06-21T13:39:12.283Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/21/705964c7812476f378728bdf590ca4b771ec72385c533964653c68e86bdc/pygments-2.19.2-py3-none-any.whl", hash = "sha256:86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b", size = 1225217, upload-time = "2025-06-21T13:39:07.939Z" },
+]
+
+[[package]]
+name = "pyjwt"
+version = "2.11.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5c/5a/b46fa56bf322901eee5b0454a34343cdbdae202cd421775a8ee4e42fd519/pyjwt-2.11.0.tar.gz", hash = "sha256:35f95c1f0fbe5d5ba6e43f00271c275f7a1a4db1dab27bf708073b75318ea623", size = 98019, upload-time = "2026-01-30T19:59:55.694Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6f/01/c26ce75ba460d5cd503da9e13b21a33804d38c2165dec7b716d06b13010c/pyjwt-2.11.0-py3-none-any.whl", hash = "sha256:94a6bde30eb5c8e04fee991062b534071fd1439ef58d2adc9ccb823e7bcd0469", size = 28224, upload-time = "2026-01-30T19:59:54.539Z" },
+]
+
+[package.optional-dependencies]
+crypto = [
+    { name = "cryptography" },
 ]
 
 [[package]]
@@ -1505,6 +1548,7 @@ dependencies = [
     { name = "argon2-cffi" },
     { name = "celery" },
     { name = "crispy-bootstrap5" },
+    { name = "dj-rest-auth", extra = ["with-social"] },
     { name = "django" },
     { name = "django-allauth", extra = ["mfa"] },
     { name = "django-anymail", extra = ["sendgrid"] },
@@ -1525,6 +1569,7 @@ dependencies = [
     { name = "python-slugify" },
     { name = "redis" },
     { name = "sentry-sdk" },
+    { name = "stripe" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "uvicorn-worker" },
     { name = "whitenoise" },
@@ -1550,6 +1595,7 @@ dev = [
     { name = "ruff" },
     { name = "sphinx" },
     { name = "sphinx-autobuild" },
+    { name = "sphinx-rtd-theme" },
     { name = "watchfiles" },
     { name = "werkzeug", extra = ["watchdog"] },
 ]
@@ -1559,6 +1605,7 @@ requires-dist = [
     { name = "argon2-cffi", specifier = "==25.1.0" },
     { name = "celery", specifier = "==5.6.2" },
     { name = "crispy-bootstrap5", specifier = "==2025.6" },
+    { name = "dj-rest-auth", extras = ["with-social"] },
     { name = "django", specifier = "==5.2.10" },
     { name = "django-allauth", extras = ["mfa"], specifier = "==65.14.0" },
     { name = "django-anymail", extras = ["sendgrid"], specifier = "==14.0" },
@@ -1579,6 +1626,7 @@ requires-dist = [
     { name = "python-slugify", specifier = "==8.0.4" },
     { name = "redis", specifier = "==7.1.0" },
     { name = "sentry-sdk", specifier = "==2.50.0" },
+    { name = "stripe", specifier = "==12.0.0" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.40.0" },
     { name = "uvicorn-worker", specifier = "==0.4.0" },
     { name = "whitenoise", specifier = "==6.11.0" },
@@ -1604,6 +1652,7 @@ dev = [
     { name = "ruff", specifier = "==0.14.13" },
     { name = "sphinx", specifier = "==9.1.0" },
     { name = "sphinx-autobuild", specifier = "==2025.8.25" },
+    { name = "sphinx-rtd-theme" },
     { name = "watchfiles", specifier = "==1.1.1" },
     { name = "werkzeug", extras = ["watchdog"], specifier = "==3.1.5" },
 ]
@@ -1757,6 +1806,20 @@ wheels = [
 ]
 
 [[package]]
+name = "sphinx-rtd-theme"
+version = "3.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "docutils" },
+    { name = "sphinx" },
+    { name = "sphinxcontrib-jquery" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/84/68/a1bfbf38c0f7bccc9b10bbf76b94606f64acb1552ae394f0b8285bfaea25/sphinx_rtd_theme-3.1.0.tar.gz", hash = "sha256:b44276f2c276e909239a4f6c955aa667aaafeb78597923b1c60babc76db78e4c", size = 7620915, upload-time = "2026-01-12T16:03:31.17Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/87/c7/b5c8015d823bfda1a346adb2c634a2101d50bb75d421eb6dcb31acd25ebc/sphinx_rtd_theme-3.1.0-py2.py3-none-any.whl", hash = "sha256:1785824ae8e6632060490f67cf3a72d404a85d2d9fc26bce3619944de5682b89", size = 7655617, upload-time = "2026-01-12T16:03:28.101Z" },
+]
+
+[[package]]
 name = "sphinxcontrib-applehelp"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1781,6 +1844,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/43/93/983afd9aa001e5201eab16b5a444ed5b9b0a7a010541e0ddfbbfd0b2470c/sphinxcontrib_htmlhelp-2.1.0.tar.gz", hash = "sha256:c9e2916ace8aad64cc13a0d233ee22317f2b9025b9cf3295249fa985cc7082e9", size = 22617, upload-time = "2024-07-29T01:09:37.889Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0a/7b/18a8c0bcec9182c05a0b3ec2a776bba4ead82750a55ff798e8d406dae604/sphinxcontrib_htmlhelp-2.1.0-py3-none-any.whl", hash = "sha256:166759820b47002d22914d64a075ce08f4c46818e17cfc9470a9786b759b19f8", size = 98705, upload-time = "2024-07-29T01:09:36.407Z" },
+]
+
+[[package]]
+name = "sphinxcontrib-jquery"
+version = "4.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "sphinx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/de/f3/aa67467e051df70a6330fe7770894b3e4f09436dea6881ae0b4f3d87cad8/sphinxcontrib-jquery-4.1.tar.gz", hash = "sha256:1620739f04e36a2c779f1a131a2dfd49b2fd07351bf1968ced074365933abc7a", size = 122331, upload-time = "2023-03-14T15:01:01.944Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/76/85/749bd22d1a68db7291c89e2ebca53f4306c3f205853cf31e9de279034c3c/sphinxcontrib_jquery-4.1-py2.py3-none-any.whl", hash = "sha256:f936030d7d0147dd026a4f2b5a57343d233f1fc7b363f68b3d4f1cb0993878ae", size = 121104, upload-time = "2023-03-14T15:01:00.356Z" },
 ]
 
 [[package]]
@@ -1843,6 +1918,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c4/68/79977123bb7be889ad680d79a40f339082c1978b5cfcf62c2d8d196873ac/starlette-0.52.1.tar.gz", hash = "sha256:834edd1b0a23167694292e94f597773bc3f89f362be6effee198165a35d62933", size = 2653702, upload-time = "2026-01-18T13:34:11.062Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/81/0d/13d1d239a25cbfb19e740db83143e95c772a1fe10202dda4b76792b114dd/starlette-0.52.1-py3-none-any.whl", hash = "sha256:0029d43eb3d273bc4f83a08720b4912ea4b071087a3b48db01b7c839f7954d74", size = 74272, upload-time = "2026-01-18T13:34:09.188Z" },
+]
+
+[[package]]
+name = "stripe"
+version = "12.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a0/d6/7d20b2431106c68004924fc9d437c346c447f2ef045f6cc83b52d6c22db1/stripe-12.0.0.tar.gz", hash = "sha256:1bc64192b6bd853fa75e2246ad553baa28e27e348eb2c3336b4d8b021d27aae5", size = 1369861, upload-time = "2025-04-01T21:12:58.773Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e2/c0/09ae7c4d31fc325d8c70da888a08e40bfddd52b5bce92b86d7902e391466/stripe-12.0.0-py2.py3-none-any.whl", hash = "sha256:1105bbceca8c0aead941c7c3ec676727610cb6437b6e8905379f2ccc370eeafd", size = 1613508, upload-time = "2025-04-01T21:12:56.637Z" },
 ]
 
 [[package]]

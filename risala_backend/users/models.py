@@ -331,12 +331,53 @@ class TeacherAvailability(TimeStampedModel, UUIDModel):
         return f"{self.teacher} - {self.get_day_of_week_display()} {self.start_time}-{self.end_time} ({self.timezone})"
 
 
+class BookingOrder(TimeStampedModel, UUIDModel):
+    """
+    Represents a package/order of multiple session bookings.
+    Created when a student selects a recurring schedule (e.g., 1 month package).
+    """
+    class Status(models.TextChoices):
+        REQUESTED = "REQUESTED", _("Requested")
+        APPROVED = "APPROVED", _("Approved")
+        PENDING = "PENDING", _("Pending Payment")
+        PAID = "PAID", _("Paid")
+        FAILED = "FAILED", _("Failed")
+        EXPIRED = "EXPIRED", _("Expired")
+
+    student = models.ForeignKey(
+        StudentProfile,
+        on_delete=models.CASCADE,
+        related_name="booking_orders",
+    )
+    teacher = models.ForeignKey(
+        TeacherProfile,
+        on_delete=models.CASCADE,
+        related_name="booking_orders",
+    )
+    total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    currency = models.CharField(max_length=3, default='usd')
+    stripe_checkout_id = models.CharField(max_length=255, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+
+    def __str__(self):
+        return f"Order {self.id} - {self.student} ({self.status})"
+
+
 class SessionBooking(TimeStampedModel, UUIDModel):
     """A booked session between a student and a teacher."""
 
     class Status(models.TextChoices):
-        PENDING = "PENDING", _("Pending")
+        PENDING = "PENDING", _("Pending (Legacy)")
+        REQUESTED = "REQUESTED", _("Requested")
+        RESERVED = "RESERVED", _("Reserved (Awaiting Payment)")
+        APPROVED = "APPROVED", _("Approved")
         CONFIRMED = "CONFIRMED", _("Confirmed")
+        DECLINED = "DECLINED", _("Declined")
+        EXPIRED = "EXPIRED", _("Expired")
         CANCELLED = "CANCELLED", _("Cancelled")
 
     teacher = models.ForeignKey(
@@ -349,9 +390,17 @@ class SessionBooking(TimeStampedModel, UUIDModel):
         on_delete=models.CASCADE,
         related_name="session_bookings",
     )
+    order = models.ForeignKey(
+        BookingOrder,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="bookings",
+    )
     start_at = models.DateTimeField()
     end_at = models.DateTimeField()
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    hourly_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.REQUESTED)
 
     class Meta:
         ordering = ["start_at"]

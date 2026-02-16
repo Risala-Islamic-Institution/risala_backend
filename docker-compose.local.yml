@@ -2,6 +2,7 @@ volumes:
   risala_backend_local_postgres_data: {}
   risala_backend_local_postgres_data_backups: {}
   risala_backend_local_redis_data: {}
+  risala_backend_local_venv: {}
 
 services:
   django: &django
@@ -15,7 +16,7 @@ services:
       - redis
       - mailpit
     volumes:
-      - /app/.venv
+      - risala_backend_local_venv:/app/.venv
       - .:/app:z
     env_file:
       - ./.envs/.local/.django

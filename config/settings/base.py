@@ -89,6 +89,7 @@ THIRD_PARTY_APPS = [
 LOCAL_APPS = [
     "risala_backend.users",
     "risala_backend.courses",
+    "risala_backend.payments",
     # Your stuff: custom apps go here
 ]
 # https://docs.djangoproject.com/en/dev/ref/settings/#installed-apps
@@ -179,6 +180,19 @@ STATICFILES_FINDERS = [
 MEDIA_ROOT = str(APPS_DIR / "media")
 # https://docs.djangoproject.com/en/dev/ref/settings/#media-url
 MEDIA_URL = "/media/"
+
+# Stripe settings
+STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY", default="")
+STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET", default="")
+STRIPE_SUCCESS_URL = env(
+    "STRIPE_SUCCESS_URL",
+    default="http://localhost:3333/dashboard/student?session_id={CHECKOUT_SESSION_ID}",
+)
+STRIPE_CANCEL_URL = env(
+    "STRIPE_CANCEL_URL",
+    default="http://localhost:3333/dashboard/student?payment=cancelled",
+)
+PAYMENT_DEFAULT_CURRENCY = "usd"
 
 # TEMPLATES
 # ------------------------------------------------------------------------------
