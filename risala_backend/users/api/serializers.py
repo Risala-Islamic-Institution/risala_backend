@@ -2,6 +2,7 @@
 API Serializers for User and Profile models.
 """
 from rest_framework import serializers
+import logging
 from dj_rest_auth.registration.serializers import RegisterSerializer
 from dj_rest_auth.serializers import LoginSerializer
 from rest_framework import serializers as drf_serializers
@@ -88,6 +89,24 @@ class CustomRegisterSerializer(RegisterSerializer):
         data["role"] = self.validated_data.get("role", "STUDENT")
         data["full_name"] = self.validated_data.get("full_name", "")
         return data
+
+    def validate(self, attrs):
+        """Wrap parent validation to log incoming data on failure for debugging."""
+        try:
+            return super().validate(attrs)
+        except serializers.ValidationError as exc:
+            logger = logging.getLogger(__name__)
+            try:
+                incoming = getattr(self, 'initial_data', None)
+            except Exception:
+                incoming = None
+            logger.warning(
+                "Registration validation failed. incoming=%s attrs=%s errors=%s",
+                incoming,
+                attrs,
+                getattr(exc, 'detail', str(exc)),
+            )
+            raise
 
     def custom_signup(self, request, user):
         """Assign role and create the appropriate profile after registration."""
