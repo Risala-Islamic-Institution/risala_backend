@@ -1,29 +1,35 @@
 import os
 import django
-
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.local")
 django.setup()
 
-from risala_backend.courses.models import Course
+from risala_backend.courses.api.serializers import CourseSerializer
 from risala_backend.users.models import User, TeacherProfile
+from rest_framework.exceptions import ValidationError
+import time
 
-def create_course():
-    try:
-        # Ensure we have a teacher
-        u, _ = User.objects.get_or_create(email="teacher@example.com", defaults={"full_name": "Debug Teacher"})
-        t, _ = TeacherProfile.objects.get_or_create(user=u)
+teacher = TeacherProfile.objects.first()
+if not teacher:
+    print("No teacher found.")
+else:
+    class DummyRequest:
+        user = teacher.user
         
-        print(f"Creating course for teacher {t}")
-        c = Course.objects.create(
-            title="Debug Course",
-            description="Testing creation",
-            created_by=t
-        )
-        print(f"Course created: {c.id} - {c.slug}")
-    except Exception as e:
-        print(f"Failed to create course: {e}")
-        import traceback
-        traceback.print_exc()
-
-if __name__ == "__main__":
-    create_course()
+    serializer = CourseSerializer(data={
+        "title": f"New Course Draft {time.time()}",
+        "description": "Description here...",
+        "category": "QURAN",
+        "price": "0.00",
+        "is_published": False
+    }, context={"request": DummyRequest()})
+    
+    if serializer.is_valid():
+        try:
+            instance = serializer.save()
+            print("Successfully created!", instance.slug)
+        except ValidationError as e:
+            print("Validation Error on Save:", e.detail)
+        except Exception as e:
+            print("Other Exception on Save:", type(e), e)
+    else:
+        print("INVALID! Errors:", serializer.errors)

@@ -3,7 +3,7 @@ API Views for User and Profile models.
 """
 from rest_framework import status
 from rest_framework.decorators import action
-from rest_framework.mixins import ListModelMixin, RetrieveModelMixin, UpdateModelMixin, CreateModelMixin
+from rest_framework.mixins import ListModelMixin, RetrieveModelMixin, UpdateModelMixin, CreateModelMixin, DestroyModelMixin
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 from rest_framework.permissions import IsAuthenticated
@@ -92,7 +92,7 @@ class TeacherProfileViewSet(RetrieveModelMixin, ListModelMixin, UpdateModelMixin
         return queryset
 
 
-class TeacherAvailabilityViewSet(CreateModelMixin, ListModelMixin, UpdateModelMixin, GenericViewSet):
+class TeacherAvailabilityViewSet(CreateModelMixin, ListModelMixin, UpdateModelMixin, DestroyModelMixin, GenericViewSet):
     """CRUD availability for current teacher; list public availability by teacher."""
     serializer_class = TeacherAvailabilitySerializer
     permission_classes = [IsAuthenticated]
