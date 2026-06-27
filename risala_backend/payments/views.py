@@ -112,8 +112,10 @@ class CreateCheckoutSessionView(APIView):
             currency = getattr(settings, 'PAYMENT_DEFAULT_CURRENCY', 'usd')
             num_sessions = order.bookings.count()
 
+            success_url = request.data.get("success_url", settings.STRIPE_SUCCESS_URL)
+            cancel_url = request.data.get("cancel_url", settings.STRIPE_CANCEL_URL)
+
             checkout_session = stripe.checkout.Session.create(
-                payment_method_types=['card'],
                 line_items=[{
                     'price_data': {
                         'currency': currency,
@@ -127,8 +129,8 @@ class CreateCheckoutSessionView(APIView):
                 }],
                 metadata={'order_id': str(order.id)},
                 mode='payment',
-                success_url=settings.STRIPE_SUCCESS_URL,
-                cancel_url=settings.STRIPE_CANCEL_URL,
+                success_url=success_url,
+                cancel_url=cancel_url,
                 client_reference_id=str(request.user.id),
             )
             print(f"DEBUG: Stripe session created: {checkout_session.id}", flush=True)
