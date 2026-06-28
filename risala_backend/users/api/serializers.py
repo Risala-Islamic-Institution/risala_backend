@@ -1,29 +1,24 @@
 """
 API Serializers for User and Profile models.
 """
-from rest_framework import serializers
+
 import logging
+
 from dj_rest_auth.registration.serializers import RegisterSerializer
 from dj_rest_auth.serializers import LoginSerializer
-from rest_framework import serializers as drf_serializers
 from django.db import IntegrityError
-from risala_backend.users.models import Notification
+from rest_framework import serializers
+from rest_framework import serializers as drf_serializers
 
-from risala_backend.users.models import (
-    User,
-    Role,
-    UserRole,
-    TeacherProfile,
-    StudentProfile,
-    TeacherAvailability,
-    SessionBooking,
-    BookingOrder,
-)
+from risala_backend.users.models import (BookingOrder, Notification, Role,
+                                         SessionBooking, StudentProfile,
+                                         TeacherAvailability, TeacherProfile,
+                                         User, UserRole)
 
 
 class RoleSerializer(serializers.ModelSerializer):
     """Serializer for Role model."""
-    
+
     class Meta:
         model = Role
         fields = ["id", "name", "description"]
@@ -31,9 +26,10 @@ class RoleSerializer(serializers.ModelSerializer):
 
 class UserSerializer(serializers.ModelSerializer):
     """Serializer for User model."""
+
     roles = RoleSerializer(many=True, read_only=True)
     primary_role = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = User
         fields = [
@@ -53,7 +49,7 @@ class UserSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["id", "is_active", "created_at"]
-    
+
     def get_primary_role(self, obj):
         role = obj.get_primary_role()
         return role.name if role else None
@@ -97,14 +93,14 @@ class CustomRegisterSerializer(RegisterSerializer):
         except serializers.ValidationError as exc:
             logger = logging.getLogger(__name__)
             try:
-                incoming = getattr(self, 'initial_data', None)
+                incoming = getattr(self, "initial_data", None)
             except Exception:
                 incoming = None
             logger.warning(
                 "Registration validation failed. incoming=%s attrs=%s errors=%s",
                 incoming,
                 attrs,
-                getattr(exc, 'detail', str(exc)),
+                getattr(exc, "detail", str(exc)),
             )
             raise
 
@@ -132,8 +128,9 @@ class CustomRegisterSerializer(RegisterSerializer):
 
 class TeacherProfileSerializer(serializers.ModelSerializer):
     """Serializer for TeacherProfile."""
+
     user = UserSerializer(read_only=True)
-    
+
     class Meta:
         model = TeacherProfile
         fields = [
@@ -152,13 +149,20 @@ class TeacherProfileSerializer(serializers.ModelSerializer):
             "profile_visibility",
             "created_at",
         ]
-        read_only_fields = ["id", "rating_average", "total_students", "verification_status", "created_at"]
+        read_only_fields = [
+            "id",
+            "rating_average",
+            "total_students",
+            "verification_status",
+            "created_at",
+        ]
 
 
 class StudentProfileSerializer(serializers.ModelSerializer):
     """Serializer for StudentProfile."""
+
     user = UserSerializer(read_only=True)
-    
+
     class Meta:
         model = StudentProfile
         fields = [
@@ -209,11 +213,15 @@ class TeacherAvailabilitySerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         request = self.context.get("request")
-        teacher_profile = getattr(request.user, "teacher_profile", None) if request else None
+        teacher_profile = (
+            getattr(request.user, "teacher_profile", None) if request else None
+        )
 
         # Derive teacher and current values for both create and update flows
         teacher = self.instance.teacher if self.instance else teacher_profile
-        day_of_week = attrs.get("day_of_week", getattr(self.instance, "day_of_week", None))
+        day_of_week = attrs.get(
+            "day_of_week", getattr(self.instance, "day_of_week", None)
+        )
         start_time = attrs.get("start_time", getattr(self.instance, "start_time", None))
         end_time = attrs.get("end_time", getattr(self.instance, "end_time", None))
         timezone = attrs.get("timezone", getattr(self.instance, "timezone", "UTC"))
@@ -292,7 +300,9 @@ class SessionBookingSerializer(serializers.ModelSerializer):
         end_at = attrs.get("end_at")
         teacher = attrs.get("teacher")
         if not (start_at and end_at and teacher):
-            raise serializers.ValidationError("teacher, start_at and end_at are required.")
+            raise serializers.ValidationError(
+                "teacher, start_at and end_at are required."
+            )
         if end_at <= start_at:
             raise serializers.ValidationError("end_at must be after start_at.")
         # Prevent overlap with existing bookings
@@ -308,7 +318,9 @@ class SessionBookingSerializer(serializers.ModelSerializer):
             end_at__gt=start_at,
         ).exists()
         if overlaps:
-            raise serializers.ValidationError("Selected time overlaps with an existing booking.")
+            raise serializers.ValidationError(
+                "Selected time overlaps with an existing booking."
+            )
         return attrs
 
     def create(self, validated_data):
@@ -333,6 +345,7 @@ class SessionBookingSerializer(serializers.ModelSerializer):
 
 class BookingOrderSerializer(serializers.ModelSerializer):
     """Serializer for BookingOrder (package)."""
+
     class Meta:
         model = BookingOrder
         fields = [
@@ -345,7 +358,13 @@ class BookingOrderSerializer(serializers.ModelSerializer):
             "stripe_checkout_id",
             "created_at",
         ]
-        read_only_fields = ["id", "student", "status", "stripe_checkout_id", "created_at"]
+        read_only_fields = [
+            "id",
+            "student",
+            "status",
+            "stripe_checkout_id",
+            "created_at",
+        ]
 
 
 class WeeklySlotSerializer(serializers.Serializer):
@@ -356,6 +375,7 @@ class WeeklySlotSerializer(serializers.Serializer):
 
 class BookingPackageSerializer(serializers.Serializer):
     """Serializer for creating a package of recurring bookings."""
+
     teacher_id = serializers.UUIDField()
     weekly_slots = WeeklySlotSerializer(many=True)
     duration_weeks = serializers.IntegerField(min_value=1, max_value=52)
@@ -363,6 +383,7 @@ class BookingPackageSerializer(serializers.Serializer):
 
     def validate_start_date(self, value):
         from django.utils import timezone
+
         if value < timezone.now().date():
             raise serializers.ValidationError("Start date cannot be in the past.")
         return value
@@ -380,3 +401,45 @@ class NotificationSerializer(serializers.ModelSerializer):
             "related_booking",
         ]
         read_only_fields = ["id", "created_at", "related_booking"]
+
+
+from rest_framework import serializers
+
+from risala_backend.users.models import TimeSlot
+
+
+class TimeSlotSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TimeSlot
+        fields = [
+            "id",
+            "start_time",
+            "end_time",
+            "duration_minutes",
+            "is_booked",
+            "booking",
+            "batch_id",
+            "batch_start_date",
+            "batch_end_date",
+        ]
+        read_only_fields = ["id", "is_booked", "booking"]
+
+
+class DayPatternSerializer(serializers.Serializer):
+    day_of_week = serializers.IntegerField()
+    selected_times = serializers.ListField(child=serializers.TimeField())
+
+
+class BulkSlotCreateSerializer(serializers.Serializer):
+    duration_minutes = serializers.IntegerField()
+    day_patterns = DayPatternSerializer(many=True)
+    start_date = serializers.DateField()
+    end_date = serializers.DateField()
+    skip_months = serializers.ListField(child=serializers.CharField(), required=False)
+    overwrite = serializers.BooleanField(required=False, default=False)
+    timezone_offset_minutes = serializers.IntegerField(required=False, allow_null=True)
+
+
+class BulkSlotDeleteSerializer(serializers.Serializer):
+    start_date = serializers.DateField(required=False)
+    end_date = serializers.DateField(required=False)
