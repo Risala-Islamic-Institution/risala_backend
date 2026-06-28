@@ -61,7 +61,10 @@ $messages = @{
 
 foreach ($key in $groups.Keys) {
     if ($groups[$key].Count -gt 0) {
-        Commit $groups[$key] $messages[$key]
+        # Commit each file in the group as its own separate commit
+        foreach ($f in $groups[$key]) {
+            Commit $f $messages[$key]
+        }
     }
 }
 
