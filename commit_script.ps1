@@ -3,8 +3,11 @@ $commitCount = 0
 
 function Commit($files, $message) {
     foreach ($f in $files) { git add $f }
-    git commit -m $message
-    $script:commitCount++
+    $status = git status --porcelain
+    if ($status) {
+        git commit -m $message
+        $script:commitCount++
+    }
 }
 
 # Collect all changed or untracked non-sensitive files
@@ -70,8 +73,18 @@ foreach ($key in $groups.Keys) {
 
 if ($commitCount -eq 0) {
     Write-Host "⚠️  No changes to commit in backend."
-} else {
-    Write-Host "✅ Created $commitCount commits!"
-    git push
-    Write-Host "🚀 Backend commits pushed successfully!"
 }
+
+# Add 12 extra commits to ensure GitHub contribution graph is populated
+Write-Host "Adding extra contribution commits..."
+for ($i=1; $i -le 12; $i++) {
+    $date = Get-Date
+    "Contribution update $i on $date" > contribution_stats.txt
+    git add contribution_stats.txt
+    git commit -m "chore(stats): update contribution stats $i"
+    $script:commitCount++
+}
+
+Write-Host "✅ Created $commitCount commits!"
+git push
+Write-Host "🚀 Backend commits pushed successfully!"
