@@ -462,6 +462,11 @@ class Notification(TimeStampedModel, UUIDModel):
 
 
 class TimeSlot(TimeStampedModel, UUIDModel):
+    class BookingType(models.TextChoices):
+        SINGLE = "SINGLE", _("Single Booking Only")
+        RANGE = "RANGE", _("Range Booking Only")
+        BOTH = "BOTH", _("Both Single & Range")
+
     teacher = models.ForeignKey(
         TeacherProfile, on_delete=models.CASCADE, related_name="time_slots"
     )
@@ -469,6 +474,9 @@ class TimeSlot(TimeStampedModel, UUIDModel):
     end_time = models.DateTimeField()
     duration_minutes = models.PositiveIntegerField(default=60)
     is_booked = models.BooleanField(default=False)
+    allowed_booking_type = models.CharField(
+        max_length=10, choices=BookingType.choices, default=BookingType.BOTH
+    )
     booking = models.OneToOneField(
         SessionBooking,
         on_delete=models.SET_NULL,
