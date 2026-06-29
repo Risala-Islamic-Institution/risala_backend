@@ -3,7 +3,7 @@ API Views for User and Profile models.
 """
 
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone as py_timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -268,27 +268,16 @@ class SessionBookingViewSet(
         serializer = self.get_serializer(booking)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    @action(detail=False, methods=["post"], url_path="create-package")
-    def create_package(self, request):
+    @action(detail=False, methods=["post"], url_path="book-range")
+    def book_range(self, request):
         """
-        Creates a package of multiple recurring sessions attached to a BookingOrder.
+        Creates a package of multiple recurring sessions attached to a BookingOrder from existing TimeSlots.
         """
-        serializer = BookingPackageSerializer(data=request.data)
+        serializer = RangeBookingRequestSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        data = serializer.validated_data
-        teacher_id = data["teacher_id"]
-        weekly_slots = data["weekly_slots"]
-        duration_weeks = data["duration_weeks"]
-        start_date = data.get("start_date") or timezone.now().date()
-
-        try:
-            teacher = TeacherProfile.objects.get(id=teacher_id)
-        except TeacherProfile.DoesNotExist:
-            return Response(
-                {"error": "Teacher not found"}, status=status.HTTP_404_NOT_FOUND
-            )
+        time_slot_ids = serializer.validated_data["time_slot_ids"]
 
         if not hasattr(request.user, "student_profile"):
             return Response(
@@ -297,93 +286,61 @@ class SessionBookingViewSet(
             )
 
         student = request.user.student_profile
-        hourly_rate = teacher.hourly_rate or Decimal("10.00")
-        if hourly_rate <= 0:
-            hourly_rate = Decimal("10.00")
-
-        potential_bookings = []
-        total_hours = Decimal("0.00")
-
-        # Generate all potential sessions
-        for week_idx in range(duration_weeks):
-            week_start = start_date + timedelta(weeks=week_idx)
-            for slot in weekly_slots:
-                day_offset = (slot["day_of_week"] - week_start.weekday()) % 7
-                session_date = week_start + timedelta(days=day_offset)
-
-                start_dt = timezone.make_aware(
-                    datetime.combine(session_date, slot["start_time"])
+        
+        with transaction.atomic():
+            # Lock the requested time slots
+            slots = TimeSlot.objects.select_for_update().filter(id__in=time_slot_ids)
+            
+            if len(slots) != len(set(time_slot_ids)):
+                return Response(
+                    {"error": "One or more time slots could not be found."},
+                    status=status.HTTP_404_NOT_FOUND,
                 )
-                end_dt = timezone.make_aware(
-                    datetime.combine(session_date, slot["end_time"])
-                )
+            
+            teacher = slots.first().teacher
+            hourly_rate = teacher.hourly_rate or Decimal("10.00")
+            if hourly_rate <= 0:
+                hourly_rate = Decimal("10.00")
 
-                # Validation 1: Must be in future
-                if start_dt <= timezone.now():
-                    continue
-
-                # Validation 2: Matches teacher availability
-                avail_exists = TeacherAvailability.objects.filter(
-                    teacher=teacher,
-                    day_of_week=slot["day_of_week"],
-                    start_time__lte=slot["start_time"],
-                    end_time__gte=slot["end_time"],
-                    is_active=True,
-                ).exists()
-
-                if not avail_exists:
+            total_hours = Decimal("0.00")
+            potential_bookings = []
+            
+            for slot in slots:
+                if slot.teacher != teacher:
                     return Response(
-                        {
-                            "error": f"Teacher is not available on {session_date} {slot['start_time']}-{slot['end_time']}"
-                        },
+                        {"error": "All time slots must belong to the same teacher."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-
-                # Validation 3: No overlaps with existing bookings
-                overlap = SessionBooking.objects.filter(
-                    teacher=teacher,
-                    status__in=[
-                        SessionBooking.Status.RESERVED,
-                        SessionBooking.Status.APPROVED,
-                        SessionBooking.Status.CONFIRMED,
-                    ],
-                    start_at__lt=end_dt,
-                    end_at__gt=start_dt,
-                ).exists()
-
-                if overlap:
+                if slot.is_booked or slot.booking_id:
                     return Response(
-                        {
-                            "error": f"Conflict detected on {session_date} {slot['start_time']}-{slot['end_time']}"
-                        },
+                        {"error": f"Time slot on {slot.start_time} is no longer available."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-
-                duration = end_dt - start_dt
+                if slot.allowed_booking_type == TimeSlot.BookingType.SINGLE:
+                    return Response(
+                        {"error": f"Time slot on {slot.start_time} only allows single bookings."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                
+                duration = slot.end_time - slot.start_time
                 hours = Decimal(duration.total_seconds() / 3600)
                 total_hours += hours
-
-                potential_bookings.append(
-                    SessionBooking(
+                
+                potential_bookings.append({
+                    "slot": slot,
+                    "booking": SessionBooking(
                         teacher=teacher,
                         student=student,
-                        start_at=start_dt,
-                        end_at=end_dt,
+                        start_at=slot.start_time,
+                        end_at=slot.end_time,
                         hourly_rate=hourly_rate,
                         status=SessionBooking.Status.REQUESTED,
                     )
-                )
-
-        if not potential_bookings:
-            return Response(
-                {"error": "No valid slots found in the requested period."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        total_amount = max(total_hours * hourly_rate, Decimal("1.00"))
-
-        # Atomic Creation
-        with transaction.atomic():
+                })
+            
+            total_amount = max(total_hours * hourly_rate, Decimal("1.00"))
+            
+            # Create Order
             order = BookingOrder.objects.create(
                 student=student,
                 teacher=teacher,
@@ -391,13 +348,53 @@ class SessionBookingViewSet(
                 currency="usd",
                 status=BookingOrder.Status.REQUESTED,
             )
-            for booking in potential_bookings:
+            
+            # Save bookings and update slots
+            for item in potential_bookings:
+                booking = item["booking"]
                 booking.order = order
                 booking.save()
+                
+                slot = item["slot"]
+                slot.is_booked = True
+                slot.booking = booking
+                slot.save(update_fields=["is_booked", "booking", "updated_at"])
+                
+        # Send notification to teacher
+        teacher_user = getattr(teacher, "user", None)
+        if teacher_user:
+            Notification.objects.create(
+                user=teacher_user,
+                title="New Package Booking",
+                body=f"A student requested a package of {len(potential_bookings)} sessions.",
+            )
 
         order_serializer = BookingOrderSerializer(order)
         return Response(order_serializer.data, status=status.HTTP_201_CREATED)
-
+    @action(detail=False, methods=["get"], url_path="pending-approvals")
+    def pending_approvals(self, request):
+        """
+        Returns pending single bookings and pending range bookings (orders) for the teacher.
+        """
+        teacher_profile = getattr(request.user, "teacher_profile", None)
+        if not teacher_profile:
+            return Response({"error": "Only teachers can view pending approvals."}, status=status.HTTP_403_FORBIDDEN)
+            
+        single_bookings = SessionBooking.objects.filter(
+            teacher=teacher_profile,
+            status=SessionBooking.Status.REQUESTED,
+            order__isnull=True
+        ).order_by("start_at")
+        
+        range_orders = BookingOrder.objects.filter(
+            teacher=teacher_profile,
+            status=BookingOrder.Status.REQUESTED
+        ).order_by("created_at")
+        
+        return Response({
+            "single_bookings": SessionBookingSerializer(single_bookings, many=True).data,
+            "range_bookings": BookingOrderSerializer(range_orders, many=True).data,
+        })
     @action(detail=False, methods=["post"], url_path="approve-package")
     def approve_package(self, request):
         order_id = request.data.get("order_id")
@@ -568,9 +565,11 @@ class TimeSlotViewSet(ListModelMixin, DestroyModelMixin, GenericViewSet):
         teacher_id = self.request.query_params.get("teacher_id")
         date_param = self.request.query_params.get("date")  # 'YYYY-MM'
 
-        # Public query: student or anyone looking up a teacher's open slots
+        # Public query: student or anyone looking up a teacher's slots
         if teacher_id:
-            qs = TimeSlot.objects.filter(teacher_id=teacher_id, is_booked=False)
+            # We return both booked and unbooked slots so the student UI can render 
+            # busy times as disabled on the calendar.
+            qs = TimeSlot.objects.filter(teacher_id=teacher_id)
             if date_param:
                 try:
                     year, month = int(date_param[:4]), int(date_param[5:7])
@@ -654,8 +653,6 @@ class TimeSlotViewSet(ListModelMixin, DestroyModelMixin, GenericViewSet):
         # Get teacher's timezone
         offset_minutes = data.get("timezone_offset_minutes")
         if offset_minutes is not None:
-            from datetime import timezone as py_timezone
-
             teacher_tz = py_timezone(timedelta(minutes=offset_minutes))
         else:
             teacher_tz_str = (
@@ -844,9 +841,7 @@ class TimeSlotViewSet(ListModelMixin, DestroyModelMixin, GenericViewSet):
 
         if start_date_str:
             try:
-                from datetime import date as date_type
-
-                sd = date_type.fromisoformat(start_date_str)
+                sd = date.fromisoformat(start_date_str)
                 qs = qs.filter(start_time__date__gte=sd)
             except ValueError:
                 return Response(
@@ -856,9 +851,7 @@ class TimeSlotViewSet(ListModelMixin, DestroyModelMixin, GenericViewSet):
 
         if end_date_str:
             try:
-                from datetime import date as date_type
-
-                ed = date_type.fromisoformat(end_date_str)
+                ed = date.fromisoformat(end_date_str)
                 qs = qs.filter(start_time__date__lte=ed)
             except ValueError:
                 return Response(
@@ -872,9 +865,6 @@ class TimeSlotViewSet(ListModelMixin, DestroyModelMixin, GenericViewSet):
         if days or times:
             offset_minutes = request.data.get("timezone_offset_minutes")
             if offset_minutes is not None:
-                from datetime import timedelta
-                from datetime import timezone as py_timezone
-
                 teacher_tz = py_timezone(timedelta(minutes=int(offset_minutes)))
             else:
                 _tz_str = getattr(teacher_profile.user, "user_timezone", "UTC") or "UTC"
@@ -937,10 +927,7 @@ class TimeSlotViewSet(ListModelMixin, DestroyModelMixin, GenericViewSet):
 
         offset_minutes = request.query_params.get("timezone_offset_minutes")
         if offset_minutes is not None:
-            from datetime import timedelta
-            from datetime import timezone as py_timezone
-
-            teacher_tz = py_timezone(timedelta(minutes=int(offset_minutes)))
+            teacher_tz = timezone.get_fixed_timezone(int(offset_minutes))
         else:
             teacher_tz_str = (
                 getattr(teacher_profile.user, "user_timezone", "UTC") or "UTC"
