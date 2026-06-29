@@ -6,8 +6,10 @@ import logging
 
 from dj_rest_auth.registration.serializers import RegisterSerializer
 from dj_rest_auth.serializers import LoginSerializer
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
+from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.exceptions import ValidationError
 from rest_framework import serializers as drf_serializers
 
 from risala_backend.users.models import (BookingOrder, Notification, Role,
@@ -263,6 +265,7 @@ class TeacherAvailabilitySerializer(serializers.ModelSerializer):
 class SessionBookingSerializer(serializers.ModelSerializer):
     teacher_name = serializers.SerializerMethodField()
     student_name = serializers.SerializerMethodField()
+    time_slot_id = serializers.UUIDField(write_only=True, required=False)
 
     class Meta:
         model = SessionBooking
@@ -276,15 +279,18 @@ class SessionBookingSerializer(serializers.ModelSerializer):
             "hourly_rate",
             "created_at",
             "teacher_name",
-            "teacher_name",
             "student_name",
             "order",
+            "time_slot_id",
         ]
         read_only_fields = [
             "id",
             "student",
             "status",
             "created_at",
+            "teacher",
+            "start_at",
+            "end_at",
         ]
 
     def get_teacher_name(self, obj):
@@ -296,31 +302,31 @@ class SessionBookingSerializer(serializers.ModelSerializer):
         return student_user.full_name or student_user.username if student_user else None
 
     def validate(self, attrs):
-        start_at = attrs.get("start_at")
-        end_at = attrs.get("end_at")
-        teacher = attrs.get("teacher")
-        if not (start_at and end_at and teacher):
-            raise serializers.ValidationError(
-                "teacher, start_at and end_at are required."
-            )
-        if end_at <= start_at:
-            raise serializers.ValidationError("end_at must be after start_at.")
-        # Prevent overlap with existing bookings
-        overlaps = SessionBooking.objects.filter(
-            teacher=teacher,
-            status__in=[
-                SessionBooking.Status.PENDING,
-                SessionBooking.Status.REQUESTED,
-                SessionBooking.Status.APPROVED,
-                SessionBooking.Status.CONFIRMED,
-            ],
-            start_at__lt=end_at,
-            end_at__gt=start_at,
-        ).exists()
-        if overlaps:
-            raise serializers.ValidationError(
-                "Selected time overlaps with an existing booking."
-            )
+        # Allow updates to bypass this if they aren't changing the time slot
+        if not self.instance:
+            time_slot_id = attrs.get("time_slot_id")
+            if not time_slot_id:
+                raise serializers.ValidationError({"time_slot_id": "This field is required for new bookings."})
+            
+            try:
+                # We do NOT use select_for_update here because it's a read-only validation. 
+                # The actual lock happens in the view's perform_create.
+                time_slot = TimeSlot.objects.get(id=time_slot_id)
+            except TimeSlot.DoesNotExist:
+                raise serializers.ValidationError({"time_slot_id": "Time slot not found."})
+
+            if time_slot.is_booked or time_slot.booking_id:
+                raise serializers.ValidationError("This time slot is already booked.")
+            
+            if time_slot.allowed_booking_type == TimeSlot.BookingType.RANGE:
+                raise serializers.ValidationError("This time slot only allows range bookings.")
+
+            attrs["teacher"] = time_slot.teacher
+            attrs["start_at"] = time_slot.start_time
+            attrs["end_at"] = time_slot.end_time
+            # Store the time slot in attrs to be used in create()
+            attrs["_time_slot"] = time_slot
+            
         return attrs
 
     def create(self, validated_data):
@@ -328,10 +334,32 @@ class SessionBookingSerializer(serializers.ModelSerializer):
         student_profile = getattr(request.user, "student_profile", None)
         if not student_profile:
             raise serializers.ValidationError("Only students can create bookings.")
+        
+        # Pop the time slot before saving the booking
+        time_slot = validated_data.pop("_time_slot", None)
+        validated_data.pop("time_slot_id", None)
+        
         validated_data["student"] = student_profile
         # Default to requested; teacher approval is required before confirmation.
         validated_data.setdefault("status", SessionBooking.Status.REQUESTED)
-        booking = super().create(validated_data)
+        
+        with transaction.atomic():
+            if time_slot:
+                # Lock the row to prevent race conditions
+                locked_slot = TimeSlot.objects.select_for_update().get(id=time_slot.id)
+                if locked_slot.is_booked or locked_slot.booking_id:
+                    raise ValidationError("This time slot is no longer available.")
+                
+                booking = super().create(validated_data)
+                
+                # Mark the slot as booked
+                locked_slot.is_booked = True
+                locked_slot.booking = booking
+                locked_slot.save(update_fields=["is_booked", "booking", "updated_at"])
+            else:
+                # Fallback if no time slot is provided (e.g., custom bookings outside of slots)
+                booking = super().create(validated_data)
+        
         teacher_user = getattr(booking.teacher, "user", None)
         if teacher_user:
             Notification.objects.create(
@@ -382,8 +410,6 @@ class BookingPackageSerializer(serializers.Serializer):
     start_date = serializers.DateField(required=False)
 
     def validate_start_date(self, value):
-        from django.utils import timezone
-
         if value < timezone.now().date():
             raise serializers.ValidationError("Start date cannot be in the past.")
         return value
@@ -417,12 +443,20 @@ class TimeSlotSerializer(serializers.ModelSerializer):
             "end_time",
             "duration_minutes",
             "is_booked",
+            "allowed_booking_type",
             "booking",
             "batch_id",
             "batch_start_date",
             "batch_end_date",
         ]
         read_only_fields = ["id", "is_booked", "booking"]
+
+class RangeBookingRequestSerializer(serializers.Serializer):
+    """Serializer for requesting a range booking from existing time slots."""
+    time_slot_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        allow_empty=False,
+    )
 
 
 class DayPatternSerializer(serializers.Serializer):
