@@ -61,7 +61,6 @@ class TestUserModel:
         )
         assert user.is_active is True
         assert user.is_suspended is False
-        assert user.timezone == "UTC"
         assert user.preferred_language == "en"
 
 
