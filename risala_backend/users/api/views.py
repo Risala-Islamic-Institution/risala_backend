@@ -25,7 +25,8 @@ from risala_backend.users.models import (BookingOrder, Notification,
 
 from .serializers import (BookingOrderSerializer, BookingPackageSerializer,
                           BulkSlotCreateSerializer, BulkSlotDeleteSerializer,
-                          NotificationSerializer, SessionBookingSerializer,
+                          NotificationSerializer, RangeBookingRequestSerializer,
+                          SessionBookingSerializer,
                           StudentProfileSerializer,
                           TeacherAvailabilitySerializer,
                           TeacherProfileSerializer, TimeSlotSerializer,
@@ -257,6 +258,13 @@ class SessionBookingViewSet(
 
         booking.status = SessionBooking.Status.CANCELLED
         booking.save(update_fields=["status", "updated_at"])
+        
+        # Free up the associated time slot
+        if hasattr(booking, 'time_slot') and booking.time_slot:
+            booking.time_slot.is_booked = False
+            booking.time_slot.booking = None
+            booking.time_slot.save(update_fields=["is_booked", "booking", "updated_at"])
+            
         teacher_user = getattr(booking.teacher, "user", None)
         if teacher_user:
             Notification.objects.create(
@@ -278,6 +286,7 @@ class SessionBookingViewSet(
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         time_slot_ids = serializer.validated_data["time_slot_ids"]
+        end_date = serializer.validated_data.get("end_date")
 
         if not hasattr(request.user, "student_profile"):
             return Response(
@@ -288,16 +297,58 @@ class SessionBookingViewSet(
         student = request.user.student_profile
         
         with transaction.atomic():
-            # Lock the requested time slots
-            slots = TimeSlot.objects.select_for_update().filter(id__in=time_slot_ids)
-            
-            if len(slots) != len(set(time_slot_ids)):
+            # First, fetch the base slots to determine patterns and teacher
+            base_slots = TimeSlot.objects.filter(id__in=time_slot_ids)
+            if not base_slots.exists():
                 return Response(
                     {"error": "One or more time slots could not be found."},
                     status=status.HTTP_404_NOT_FOUND,
                 )
+                
+            teacher = base_slots.first().teacher
             
-            teacher = slots.first().teacher
+            # If end_date is provided, extrapolate the pattern. Otherwise just use the provided slots.
+            if end_date:
+                import datetime
+                end_datetime = timezone.make_aware(datetime.datetime.combine(end_date, datetime.time.max))
+                
+                # Gather patterns: (day_of_week, start_time)
+                patterns = []
+                for s in base_slots:
+                    start_local = timezone.localtime(s.start_time)
+                    patterns.append((start_local.weekday(), start_local.time()))
+                    
+                # Find all unbooked slots for this teacher up to end_date that match the patterns
+                all_teacher_slots = TimeSlot.objects.filter(
+                    teacher=teacher,
+                    is_booked=False,
+                    booking__isnull=True,
+                    start_time__lte=end_datetime,
+                    start_time__gt=timezone.now(),
+                    allowed_booking_type__in=[TimeSlot.BookingType.RANGE, TimeSlot.BookingType.BOTH]
+                ).select_for_update()
+                
+                # Filter locally to match exact time/day (since TimeSlot might not have denormalized weekday/time fields easily filterable across timezones in ORM without complex extraction)
+                target_slots = []
+                for slot in all_teacher_slots:
+                    start_local = timezone.localtime(slot.start_time)
+                    if (start_local.weekday(), start_local.time()) in patterns:
+                        target_slots.append(slot.id)
+                        
+                if not target_slots:
+                     return Response(
+                        {"error": "No available slots found for the requested pattern."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                slots = TimeSlot.objects.select_for_update().filter(id__in=target_slots)
+            else:
+                slots = TimeSlot.objects.select_for_update().filter(id__in=time_slot_ids)
+                if len(slots) != len(set(time_slot_ids)):
+                    return Response(
+                        {"error": "One or more time slots could not be found."},
+                        status=status.HTTP_404_NOT_FOUND,
+                    )
+
             hourly_rate = teacher.hourly_rate or Decimal("10.00")
             if hourly_rate <= 0:
                 hourly_rate = Decimal("10.00")
@@ -338,6 +389,12 @@ class SessionBookingViewSet(
                     )
                 })
             
+            if not potential_bookings:
+                 return Response(
+                    {"error": "No available slots found."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             total_amount = max(total_hours * hourly_rate, Decimal("1.00"))
             
             # Create Order
@@ -368,9 +425,10 @@ class SessionBookingViewSet(
                 title="New Package Booking",
                 body=f"A student requested a package of {len(potential_bookings)} sessions.",
             )
-
+        
         order_serializer = BookingOrderSerializer(order)
         return Response(order_serializer.data, status=status.HTTP_201_CREATED)
+
     @action(detail=False, methods=["get"], url_path="pending-approvals")
     def pending_approvals(self, request):
         """
@@ -516,6 +574,13 @@ class SessionBookingViewSet(
 
         booking.status = SessionBooking.Status.DECLINED
         booking.save(update_fields=["status", "updated_at"])
+        
+        # Free up the associated time slot
+        if hasattr(booking, 'time_slot') and booking.time_slot:
+            booking.time_slot.is_booked = False
+            booking.time_slot.booking = None
+            booking.time_slot.save(update_fields=["is_booked", "booking", "updated_at"])
+            
         student_user = getattr(booking.student, "user", None)
         if student_user:
             Notification.objects.create(
@@ -526,6 +591,61 @@ class SessionBookingViewSet(
             )
         serializer = self.get_serializer(booking)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="start")
+    def start(self, request, pk=None):
+        booking = self.get_object()
+        teacher_profile = getattr(request.user, "teacher_profile", None)
+        student_profile = getattr(request.user, "student_profile", None)
+
+        if not teacher_profile and not student_profile:
+            return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+            
+        if teacher_profile and booking.teacher != teacher_profile:
+            return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+            
+        if student_profile and booking.student != student_profile:
+            return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+
+        if booking.status not in {SessionBooking.Status.CONFIRMED, SessionBooking.Status.IN_PROGRESS}:
+            return Response(
+                {"detail": "Only confirmed sessions can be started."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        booking.status = SessionBooking.Status.IN_PROGRESS
+        booking.save(update_fields=["status", "updated_at"])
+
+        serializer = self.get_serializer(booking)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="complete")
+    def complete(self, request, pk=None):
+        booking = self.get_object()
+        teacher_profile = getattr(request.user, "teacher_profile", None)
+
+        if not teacher_profile or booking.teacher != teacher_profile:
+            return Response(
+                {"detail": "Only the assigned teacher can mark the session as complete."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if booking.status not in {SessionBooking.Status.CONFIRMED, SessionBooking.Status.IN_PROGRESS}:
+            return Response(
+                {"detail": "Only confirmed or in-progress sessions can be completed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            booking.status = SessionBooking.Status.COMPLETED
+            booking.save(update_fields=["status", "updated_at"])
+            
+            # TODO: Phase 11 Escrow Payout logic will be integrated here
+            # For now, just mark the teacher's total earnings or let a separate signal/job handle it.
+
+        serializer = self.get_serializer(booking)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 
 
 class NotificationViewSet(ListModelMixin, UpdateModelMixin, GenericViewSet):
@@ -649,6 +769,7 @@ class TimeSlotViewSet(ListModelMixin, DestroyModelMixin, GenericViewSet):
         end_date = data["end_date"]
         skip_months = set(data.get("skip_months", []))
         overwrite = data.get("overwrite", False)
+        allowed_booking_type = data.get("allowed_booking_type", "BOTH")
 
         # Get teacher's timezone
         offset_minutes = data.get("timezone_offset_minutes")
@@ -712,6 +833,7 @@ class TimeSlotViewSet(ListModelMixin, DestroyModelMixin, GenericViewSet):
                             batch_id=batch_id,
                             batch_start_date=start_date,
                             batch_end_date=end_date,
+                            allowed_booking_type=allowed_booking_type,
                         )
                     )
 
@@ -738,6 +860,7 @@ class TimeSlotViewSet(ListModelMixin, DestroyModelMixin, GenericViewSet):
                         "batch_id": slot.batch_id,
                         "batch_start_date": slot.batch_start_date,
                         "batch_end_date": slot.batch_end_date,
+                        "allowed_booking_type": slot.allowed_booking_type,
                     },
                 )
                 if created:
@@ -749,11 +872,13 @@ class TimeSlotViewSet(ListModelMixin, DestroyModelMixin, GenericViewSet):
                         obj.batch_id = slot.batch_id
                         obj.batch_start_date = slot.batch_start_date
                         obj.batch_end_date = slot.batch_end_date
+                        obj.allowed_booking_type = slot.allowed_booking_type
                         obj.save(
                             update_fields=[
                                 "batch_id",
                                 "batch_start_date",
                                 "batch_end_date",
+                                "allowed_booking_type",
                             ]
                         )
 

@@ -282,6 +282,7 @@ class SessionBookingSerializer(serializers.ModelSerializer):
             "student_name",
             "order",
             "time_slot_id",
+            "jitsi_room_url",
         ]
         read_only_fields = [
             "id",
@@ -291,6 +292,7 @@ class SessionBookingSerializer(serializers.ModelSerializer):
             "teacher",
             "start_at",
             "end_at",
+            "jitsi_room_url",
         ]
 
     def get_teacher_name(self, obj):
@@ -457,7 +459,7 @@ class RangeBookingRequestSerializer(serializers.Serializer):
         child=serializers.UUIDField(),
         allow_empty=False,
     )
-
+    end_date = serializers.DateField(required=False, allow_null=True)
 
 class DayPatternSerializer(serializers.Serializer):
     day_of_week = serializers.IntegerField()
@@ -472,6 +474,7 @@ class BulkSlotCreateSerializer(serializers.Serializer):
     skip_months = serializers.ListField(child=serializers.CharField(), required=False)
     overwrite = serializers.BooleanField(required=False, default=False)
     timezone_offset_minutes = serializers.IntegerField(required=False, allow_null=True)
+    allowed_booking_type = serializers.ChoiceField(choices=["SINGLE", "RANGE", "BOTH"], default="BOTH")
 
 
 class BulkSlotDeleteSerializer(serializers.Serializer):

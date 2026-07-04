@@ -396,6 +396,8 @@ class SessionBooking(TimeStampedModel, UUIDModel):
         DECLINED = "DECLINED", _("Declined")
         EXPIRED = "EXPIRED", _("Expired")
         CANCELLED = "CANCELLED", _("Cancelled")
+        IN_PROGRESS = "IN_PROGRESS", _("In Progress")
+        COMPLETED = "COMPLETED", _("Completed")
 
     teacher = models.ForeignKey(
         TeacherProfile,
@@ -430,6 +432,11 @@ class SessionBooking(TimeStampedModel, UUIDModel):
 
     def __str__(self):
         return f"{self.teacher} -> {self.student} @ {self.start_at}"
+
+    @property
+    def jitsi_room_url(self):
+        # Generates a unique, predictable room URL for this session
+        return f"https://meet.jit.si/risala-session-{self.id}"
 
     def overlaps(self, other_start, other_end) -> bool:
         return not (self.end_at <= other_start or self.start_at >= other_end)
