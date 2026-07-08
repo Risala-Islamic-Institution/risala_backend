@@ -186,7 +186,7 @@ dependencies = [
     "gunicorn==23.0.0",
     "hiredis==3.3.0",
     "pillow==11.2.1",
-    "psycopg[c]==3.3.2",
+    "psycopg[binary]==3.3.2",
     "python-slugify==8.0.4",
     "redis==7.1.0",
     "sentry-sdk==2.50.0",
