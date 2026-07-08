@@ -161,7 +161,7 @@ LOGGING = {
 SENTRY_DSN = env("SENTRY_DSN", default="")
 SENTRY_LOG_LEVEL = env.int("DJANGO_SENTRY_LOG_LEVEL", logging.INFO)
 
-if SENTRY_DSN:
+if SENTRY_DSN and (SENTRY_DSN.startswith("http://") or SENTRY_DSN.startswith("https://")):
     sentry_logging = LoggingIntegration(
         level=SENTRY_LOG_LEVEL,  # Capture info and above as breadcrumbs
         event_level=logging.ERROR,  # Send errors as events
