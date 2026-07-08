@@ -19,7 +19,17 @@ from .base import env
 # https://docs.djangoproject.com/en/dev/ref/settings/#secret-key
 SECRET_KEY = env("DJANGO_SECRET_KEY", default="django-insecure-default-key-for-prod-failsafe-value")
 # https://docs.djangoproject.com/en/dev/ref/settings/#allowed-hosts
-ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=["risala.com"])
+# Defaults include the aletcloud domain the app is actually served from, plus
+# localhost/127.0.0.1 so platform health checks don't 400 with DisallowedHost.
+ALLOWED_HOSTS = env.list(
+    "DJANGO_ALLOWED_HOSTS",
+    default=["risala.app.aletcloud.com", "risala.com", "localhost", "127.0.0.1"],
+)
+# Browsers need the https origin trusted for CSRF-protected POSTs (admin login).
+CSRF_TRUSTED_ORIGINS = env.list(
+    "DJANGO_CSRF_TRUSTED_ORIGINS",
+    default=["https://risala.app.aletcloud.com"],
+)
 
 # DATABASES
 # ------------------------------------------------------------------------------
@@ -45,7 +55,10 @@ CACHES = {
 # https://docs.djangoproject.com/en/dev/ref/settings/#secure-proxy-ssl-header
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 # https://docs.djangoproject.com/en/dev/ref/settings/#secure-ssl-redirect
-SECURE_SSL_REDIRECT = env.bool("DJANGO_SECURE_SSL_REDIRECT", default=True)
+# Default False: if the platform proxy doesn't forward X-Forwarded-Proto,
+# a True default turns every request into an infinite https redirect loop.
+# Set DJANGO_SECURE_SSL_REDIRECT=True once the proxy header is confirmed.
+SECURE_SSL_REDIRECT = env.bool("DJANGO_SECURE_SSL_REDIRECT", default=False)
 # https://docs.djangoproject.com/en/dev/ref/settings/#session-cookie-secure
 SESSION_COOKIE_SECURE = True
 # https://docs.djangoproject.com/en/dev/ref/settings/#session-cookie-name
