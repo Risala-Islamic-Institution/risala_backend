@@ -17,15 +17,6 @@ class Course(TimeStampedModel, UUIDModel):
     Based on Risala_doc class diagram.
     """
     
-    class Category(models.TextChoices):
-        QURAN = "QURAN", _("Quran")
-        TAJWEED = "TAJWEED", _("Tajweed")
-        ARABIC = "ARABIC", _("Arabic Language")
-        TAFSIR = "TAFSIR", _("Tafsir")
-        HIFZ = "HIFZ", _("Hifz (Memorization)")
-        FIQH = "FIQH", _("Fiqh")
-        AQEEDAH = "AQEEDAH", _("Aqeedah")
-    
     class Level(models.TextChoices):
         BEGINNER = "BEGINNER", _("Beginner")
         INTERMEDIATE = "INTERMEDIATE", _("Intermediate")
@@ -38,11 +29,8 @@ class Course(TimeStampedModel, UUIDModel):
     title = models.CharField(max_length=255)
     slug = models.SlugField(max_length=255, unique=True, blank=True)
     description = models.TextField()
-    category = models.CharField(
-        max_length=20,
-        choices=Category.choices,
-        default=Category.QURAN,
-    )
+    # Free-form category — any teacher can classify their course as they wish.
+    category = models.CharField(max_length=100, blank=True, default="")
     level = models.CharField(
         max_length=20,
         choices=Level.choices,

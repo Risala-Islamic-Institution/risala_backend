@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 
 from risala_backend.users.models import SessionBooking, BookingOrder, Notification
 from risala_backend.payments.models import Payment
+from risala_backend.courses.models import Course, Enrollment
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -24,6 +25,11 @@ class CreateCheckoutSessionView(APIView):
 
         order_id = request.data.get("order_id")
         booking_id = request.data.get("booking_id")
+        course_id = request.data.get("course_id")
+
+        # --- Course Payment Flow ---
+        if course_id:
+            return self._handle_course_payment(request, course_id)
 
         # --- New Package Flow (order_id) ---
         if order_id:
@@ -34,9 +40,9 @@ class CreateCheckoutSessionView(APIView):
             return self._handle_legacy_booking_payment(request, booking_id)
 
         # Neither provided
-        print("DEBUG: Neither order_id nor booking_id provided in request", flush=True)
+        print("DEBUG: Neither order_id, booking_id, nor course_id provided in request", flush=True)
         return Response(
-            {"error": "order_id or booking_id is required"},
+            {"error": "order_id, booking_id, or course_id is required"},
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -75,6 +81,58 @@ class CreateCheckoutSessionView(APIView):
             booking.save(update_fields=["order", "status", "updated_at"])
 
         return self._handle_order_payment(request, str(order.id))
+
+    def _handle_course_payment(self, request, course_id):
+        """Core payment logic for purchasing a Course."""
+        print(f"DEBUG: Creating checkout session for course {course_id}", flush=True)
+
+        try:
+            course = Course.objects.get(id=course_id)
+        except Course.DoesNotExist:
+            return Response({"error": "Course not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if not hasattr(request.user, "student_profile"):
+            return Response({"error": "Only students can enroll in courses."}, status=status.HTTP_403_FORBIDDEN)
+
+        student = request.user.student_profile
+        
+        # Check if already enrolled
+        if Enrollment.objects.filter(course=course, student=student).exists():
+            return Response({"error": "Already enrolled in this course."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Free course logic
+        if course.price <= 0:
+            Enrollment.objects.create(course=course, student=student, status=Enrollment.Status.ENROLLED)
+            return Response({'sessionId': 'free_bypass', 'checkout_url': 'risala://payment/success?session_id=free_bypass'})
+
+        # Paid course logic
+        amount_cents = int(course.price * 100)
+        currency = getattr(settings, 'PAYMENT_DEFAULT_CURRENCY', 'usd')
+        success_url = request.data.get("success_url", settings.STRIPE_SUCCESS_URL)
+        cancel_url = request.data.get("cancel_url", settings.STRIPE_CANCEL_URL)
+
+        try:
+            checkout_session = stripe.checkout.Session.create(
+                line_items=[{
+                    'price_data': {
+                        'currency': currency,
+                        'product_data': {
+                            'name': course.title,
+                            'description': "Course Enrollment",
+                        },
+                        'unit_amount': amount_cents,
+                    },
+                    'quantity': 1,
+                }],
+                metadata={'course_id': str(course.id)},
+                mode='payment',
+                success_url=success_url,
+                cancel_url=cancel_url,
+                client_reference_id=str(request.user.id),
+            )
+            return Response({'sessionId': checkout_session.id, 'checkout_url': checkout_session.url})
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def _handle_order_payment(self, request, order_id):
         """Core payment logic for a BookingOrder."""
@@ -197,10 +255,52 @@ class StripeWebhookView(View):
         return HttpResponse(status=200)
 
     def handle_checkout_session_completed(self, session):
-        order_id = session.get('metadata', {}).get('order_id')
-        if not order_id:
-            return
+        metadata = session.get('metadata', {})
+        order_id = metadata.get('order_id')
+        course_id = metadata.get('course_id')
 
+        if course_id:
+            self._process_course_purchase(session, course_id)
+        elif order_id:
+            self._process_order_purchase(session, order_id)
+
+    def _process_course_purchase(self, session, course_id):
+        try:
+            course = Course.objects.get(id=course_id)
+            user_id = session.get('client_reference_id')
+            if not user_id:
+                return
+
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            user = User.objects.get(id=user_id)
+            if not hasattr(user, "student_profile"):
+                return
+                
+            student = user.student_profile
+            
+            with transaction.atomic():
+                enrollment, created = Enrollment.objects.get_or_create(
+                    course=course,
+                    student=student,
+                    defaults={'status': Enrollment.Status.ENROLLED}
+                )
+                if created:
+                    Notification.objects.create(
+                        user=user,
+                        title="Course Enrollment Successful",
+                        body=f"You have successfully enrolled in {course.title}.",
+                    )
+                    if getattr(course.created_by, "user", None):
+                        Notification.objects.create(
+                            user=course.created_by.user,
+                            title="New Course Student",
+                            body=f"{user.full_name or user.username} enrolled in {course.title}.",
+                        )
+        except Exception as e:
+            print(f"ERROR: Course webhook processing failed: {str(e)}")
+
+    def _process_order_purchase(self, session, order_id):
         try:
             with transaction.atomic():
                 order = BookingOrder.objects.select_for_update().get(id=order_id)
