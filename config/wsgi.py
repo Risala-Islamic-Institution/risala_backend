@@ -45,24 +45,35 @@ def _run_startup_tasks():
     from django.core.management import call_command
     from django.db import connection
 
+    log = logging.getLogger(__name__)
     try:
         with connection.cursor() as cursor:
             cursor.execute("SELECT pg_try_advisory_lock(721438)")
             acquired = cursor.fetchone()[0]
         if not acquired:  # another worker is already on it
             return
+    except Exception:
+        log.exception("Startup advisory lock failed; continuing boot")
+        return
+    try:
         call_command("migrate", interactive=False)
+    except Exception:
+        log.exception("Startup migrate failed; continuing boot")
+    try:
         manifest = Path(settings.STATIC_ROOT) / "staticfiles.json"
         if not manifest.exists():
             call_command("collectstatic", interactive=False, verbosity=0)
     except Exception:
-        logging.getLogger(__name__).exception(
-            "Startup migrate/collectstatic failed; continuing boot",
-        )
+        log.exception("Startup collectstatic failed; continuing boot")
 
 
-_startup_tasks_off = os.environ.get("DJANGO_STARTUP_TASKS", "").lower() in {"0", "false", "off"}
-if os.environ["DJANGO_SETTINGS_MODULE"].endswith("production") and not _startup_tasks_off:
+_startup_tasks_off = os.environ.get("DJANGO_STARTUP_TASKS", "").lower() in {
+    "0",
+    "false",
+    "off",
+}
+_is_production = os.environ["DJANGO_SETTINGS_MODULE"].endswith("production")
+if _is_production and not _startup_tasks_off:
     import django
 
     django.setup()
