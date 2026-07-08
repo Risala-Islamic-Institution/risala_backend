@@ -23,7 +23,7 @@ SECRET_KEY = env("DJANGO_SECRET_KEY", default="django-insecure-default-key-for-p
 # localhost/127.0.0.1 so platform health checks don't 400 with DisallowedHost.
 ALLOWED_HOSTS = env.list(
     "DJANGO_ALLOWED_HOSTS",
-    default=["risala.app.aletcloud.com", "risala.com", "localhost", "127.0.0.1"],
+    default=["risala.app.aletcloud.com", "localhost", "127.0.0.1"],
 )
 # Browsers need the https origin trusted for CSRF-protected POSTs (admin login).
 CSRF_TRUSTED_ORIGINS = env.list(
@@ -100,7 +100,7 @@ STORAGES = {
 # https://docs.djangoproject.com/en/dev/ref/settings/#default-from-email
 DEFAULT_FROM_EMAIL = env(
     "DJANGO_DEFAULT_FROM_EMAIL",
-    default="Risala_Backend <noreply@risala.com>",
+    default="Risala <noreply@risala.app.aletcloud.com>",
 )
 # https://docs.djangoproject.com/en/dev/ref/settings/#server-email
 SERVER_EMAIL = env("DJANGO_SERVER_EMAIL", default=DEFAULT_FROM_EMAIL)
@@ -204,7 +204,7 @@ CORS_ALLOWED_ORIGINS = [
 
 # Tools that generate code samples can use SERVERS to point to the correct domain
 SPECTACULAR_SETTINGS["SERVERS"] = [
-    {"url": "https://risala.com", "description": "Production server"},
+    {"url": "https://risala.app.aletcloud.com", "description": "Production server"},
 ]
 # Your stuff...
 # ------------------------------------------------------------------------------
