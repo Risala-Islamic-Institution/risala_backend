@@ -177,8 +177,13 @@ sentry_sdk.init(
     traces_sample_rate=env.float("SENTRY_TRACES_SAMPLE_RATE", default=0.0),
 )
 
-# django-rest-framework
+# django-rest-framework & CORS
 # -------------------------------------------------------------------------------
+CORS_ALLOWED_ORIGINS = [
+    "https://risala.app.aletcloud.com",
+    "http://risala.app.aletcloud.com",
+]
+
 # Tools that generate code samples can use SERVERS to point to the correct domain
 SPECTACULAR_SETTINGS["SERVERS"] = [
     {"url": "https://risala.com", "description": "Production server"},
