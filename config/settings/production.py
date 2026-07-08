@@ -161,23 +161,26 @@ LOGGING = {
 SENTRY_DSN = env("SENTRY_DSN", default="")
 SENTRY_LOG_LEVEL = env.int("DJANGO_SENTRY_LOG_LEVEL", logging.INFO)
 
-if SENTRY_DSN and (SENTRY_DSN.startswith("http://") or SENTRY_DSN.startswith("https://")):
-    sentry_logging = LoggingIntegration(
-        level=SENTRY_LOG_LEVEL,  # Capture info and above as breadcrumbs
-        event_level=logging.ERROR,  # Send errors as events
-    )
-    integrations = [
-        sentry_logging,
-        DjangoIntegration(),
-        CeleryIntegration(),
-        RedisIntegration(),
-    ]
-    sentry_sdk.init(
-        dsn=SENTRY_DSN,
-        integrations=integrations,
-        environment=env("SENTRY_ENVIRONMENT", default="production"),
-        traces_sample_rate=env.float("SENTRY_TRACES_SAMPLE_RATE", default=0.0),
-    )
+try:
+    if SENTRY_DSN and (SENTRY_DSN.startswith("http://") or SENTRY_DSN.startswith("https://")):
+        sentry_logging = LoggingIntegration(
+            level=SENTRY_LOG_LEVEL,  # Capture info and above as breadcrumbs
+            event_level=logging.ERROR,  # Send errors as events
+        )
+        integrations = [
+            sentry_logging,
+            DjangoIntegration(),
+            CeleryIntegration(),
+            RedisIntegration(),
+        ]
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            integrations=integrations,
+            environment=env("SENTRY_ENVIRONMENT", default="production"),
+            traces_sample_rate=env.float("SENTRY_TRACES_SAMPLE_RATE", default=0.0),
+        )
+except Exception:
+    logging.warning("Sentry initialization failed, ignoring error.")
 
 # django-rest-framework & CORS
 # -------------------------------------------------------------------------------
