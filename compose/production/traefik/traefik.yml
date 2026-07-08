@@ -31,7 +31,7 @@ certificatesResolvers:
 http:
   routers:
     web-secure-router:
-      rule: 'Host(`risala.com`) || Host(`www.risala.com`)'
+      rule: 'Host(`risala.app.aletcloud.com`)'
       entryPoints:
         - web-secure
       middlewares:
@@ -42,7 +42,7 @@ http:
         certResolver: letsencrypt
 
     flower-secure-router:
-      rule: 'Host(`risala.com`)'
+      rule: 'Host(`risala.app.aletcloud.com`)'
       entryPoints:
         - flower
       service: flower
@@ -51,7 +51,7 @@ http:
         certResolver: letsencrypt
 
     web-media-router:
-      rule: '(Host(`risala.com`) || Host(`www.risala.com`)) && PathPrefix(`/media/`)'
+      rule: 'Host(`risala.app.aletcloud.com`) && PathPrefix(`/media/`)'
       entryPoints:
         - web-secure
       middlewares:
