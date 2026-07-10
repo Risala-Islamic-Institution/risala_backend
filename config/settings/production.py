@@ -91,9 +91,16 @@ STORAGES = {
         "BACKEND": "django.core.files.storage.FileSystemStorage",
     },
     "staticfiles": {
-        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        # Non-manifest storage: with the manifest variant, a boot that
+        # precedes collectstatic makes every template page 500 on the
+        # missing manifest. Cache-busting hashes aren't worth that here.
+        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
     },
 }
+# Static files are collected in a background thread shortly after boot
+# (see config/wsgi.py); re-scan the directory instead of indexing it once
+# at startup so those files are served without a worker restart.
+WHITENOISE_AUTOREFRESH = env.bool("DJANGO_WHITENOISE_AUTOREFRESH", default=True)
 
 # EMAIL
 # ------------------------------------------------------------------------------
