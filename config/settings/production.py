@@ -138,6 +138,29 @@ else:
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
 
+# django-allauth / dj-rest-auth
+# ------------------------------------------------------------------------------
+# When no real email provider is configured the console backend above just
+# prints verification emails to the logs, so `mandatory` verification (inherited
+# from base.py) makes signup -> login impossible for real users. Disable it so
+# accounts are usable immediately and registration returns an auth token, which
+# is what the mobile client expects. Re-enable (set "mandatory") once a real
+# EMAIL_BACKEND such as SendGrid is configured via SENDGRID_API_KEY.
+ACCOUNT_EMAIL_VERIFICATION = "none"
+
+# base.py does not define REST_AUTH, so without this block production silently
+# falls back to dj-rest-auth's default serializers and skips role assignment,
+# profile creation, email-or-username login, and the rich user-detail payload
+# the mobile app relies on. Mirror the local configuration.
+REST_AUTH = {
+    "USE_JWT": False,  # Using Token auth for simplicity
+    "TOKEN_MODEL": "rest_framework.authtoken.models.Token",
+    "REGISTER_SERIALIZER": "risala_backend.users.api.serializers.CustomRegisterSerializer",
+    "LOGIN_SERIALIZER": "risala_backend.users.api.serializers.CustomLoginSerializer",
+    "USER_DETAILS_SERIALIZER": "risala_backend.users.api.serializers.UserSerializer",
+}
+
+
 # LOGGING
 # ------------------------------------------------------------------------------
 # https://docs.djangoproject.com/en/dev/ref/settings/#logging

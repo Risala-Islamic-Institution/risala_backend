@@ -74,6 +74,48 @@ class CustomRegisterSerializer(RegisterSerializer):
     role = serializers.ChoiceField(choices=ROLE_CHOICES, default="STUDENT")
     full_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
+    # --- Teacher-specific fields (required when role == USTAZ) ---
+    biography = serializers.CharField(required=False, allow_blank=True)
+    qualifications = serializers.CharField(required=False, allow_blank=True)
+    years_of_experience = serializers.IntegerField(
+        required=False, min_value=0, default=0
+    )
+    teaching_languages = serializers.ListField(
+        child=serializers.CharField(), required=False, default=list
+    )
+    teaching_level = serializers.ChoiceField(
+        choices=TeacherProfile.TeachingLevel.choices,
+        required=False,
+        allow_blank=True,
+    )
+    specialization = serializers.ChoiceField(
+        choices=TeacherProfile.Specialization.choices,
+        required=False,
+        allow_blank=True,
+    )
+    hourly_rate = serializers.DecimalField(
+        max_digits=10, decimal_places=2, required=False, min_value=0
+    )
+
+    # --- Student-specific fields (optional) ---
+    learning_goals = serializers.CharField(required=False, allow_blank=True)
+    current_level = serializers.ChoiceField(
+        choices=StudentProfile.CurrentLevel.choices,
+        required=False,
+        allow_blank=True,
+    )
+
+    # A teacher signup is only meaningful with these filled in; otherwise the
+    # instructor lands with an empty profile (no rate, no qualifications) and
+    # cannot be discovered/booked properly.
+    REQUIRED_TEACHER_FIELDS = {
+        "biography": "Tell students about yourself (biography is required).",
+        "qualifications": "List your qualifications.",
+        "specialization": "Choose your main specialization.",
+        "teaching_level": "Choose the level you teach.",
+        "hourly_rate": "Set your hourly rate.",
+    }
+
     def validate_role(self, value):
         # Only learners and instructors can self-register; staff roles are provisioned internally.
         if value not in self.PUBLIC_SIGNUP_ROLES:
@@ -89,9 +131,9 @@ class CustomRegisterSerializer(RegisterSerializer):
         return data
 
     def validate(self, attrs):
-        """Wrap parent validation to log incoming data on failure for debugging."""
+        """Validate the password (parent) then role-specific requirements."""
         try:
-            return super().validate(attrs)
+            attrs = super().validate(attrs)
         except serializers.ValidationError as exc:
             logger = logging.getLogger(__name__)
             try:
@@ -106,10 +148,31 @@ class CustomRegisterSerializer(RegisterSerializer):
             )
             raise
 
+        # Instructors must complete their teaching profile at signup.
+        if attrs.get("role") == "USTAZ":
+            errors = {}
+            for field, message in self.REQUIRED_TEACHER_FIELDS.items():
+                if attrs.get(field) in (None, "", []):
+                    errors[field] = [message]
+            if not attrs.get("teaching_languages"):
+                errors["teaching_languages"] = [
+                    "Add at least one language you teach in."
+                ]
+            rate = attrs.get("hourly_rate")
+            if rate is not None and rate <= 0 and "hourly_rate" not in errors:
+                errors["hourly_rate"] = [
+                    "Hourly rate must be greater than zero."
+                ]
+            if errors:
+                raise serializers.ValidationError(errors)
+
+        return attrs
+
     def custom_signup(self, request, user):
-        """Assign role and create the appropriate profile after registration."""
-        role_name = self.validated_data.get("role", "STUDENT")
-        full_name = self.validated_data.get("full_name", "")
+        """Assign role and create/populate the appropriate profile."""
+        data = self.validated_data
+        role_name = data.get("role", "STUDENT")
+        full_name = data.get("full_name", "")
 
         if full_name:
             user.full_name = full_name
@@ -119,13 +182,29 @@ class CustomRegisterSerializer(RegisterSerializer):
             name=role_name,
             defaults={"description": f"{role_name} role"},
         )
+        # Assigning the role auto-creates the matching (empty) profile via the
+        # post_save signal; we then fill it in with the submitted details.
         UserRole.objects.get_or_create(user=user, role=role)
 
-        # Create role-specific profile per the documented model
         if role_name == "STUDENT":
-            StudentProfile.objects.get_or_create(user=user)
+            profile, _ = StudentProfile.objects.get_or_create(user=user)
+            profile.learning_goals = data.get("learning_goals", "") or ""
+            current_level = data.get("current_level")
+            if current_level:
+                profile.current_level = current_level
+            profile.save()
         elif role_name == "USTAZ":
-            TeacherProfile.objects.get_or_create(user=user)
+            profile, _ = TeacherProfile.objects.get_or_create(user=user)
+            profile.biography = data.get("biography", "") or ""
+            profile.qualifications = data.get("qualifications", "") or ""
+            profile.years_of_experience = data.get("years_of_experience", 0) or 0
+            profile.teaching_languages = data.get("teaching_languages", []) or []
+            teaching_level = data.get("teaching_level")
+            if teaching_level:
+                profile.teaching_level = teaching_level
+            profile.specialization = data.get("specialization", "") or ""
+            profile.hourly_rate = data.get("hourly_rate", 0) or 0
+            profile.save()
 
 
 class TeacherProfileSerializer(serializers.ModelSerializer):
