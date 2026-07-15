@@ -75,9 +75,9 @@ if ($commitCount -eq 0) {
     Write-Host "⚠️  No changes to commit in backend."
 }
 
-# Add 12 extra commits to ensure GitHub contribution graph is populated
+# Add 32 extra commits to ensure GitHub contribution graph is populated
 Write-Host "Adding extra contribution commits..."
-for ($i=1; $i -le 12; $i++) {
+for ($i=1; $i -le 32; $i++) {
     $date = Get-Date
     "Contribution update $i on $date" > contribution_stats.txt
     git add contribution_stats.txt
