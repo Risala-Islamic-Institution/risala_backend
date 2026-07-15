@@ -14,7 +14,7 @@ from rest_framework.decorators import action
 from rest_framework.mixins import (CreateModelMixin, DestroyModelMixin,
                                    ListModelMixin, RetrieveModelMixin,
                                    UpdateModelMixin)
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
@@ -86,6 +86,13 @@ class TeacherProfileViewSet(
     serializer_class = TeacherProfileSerializer
     queryset = TeacherProfile.objects.filter(profile_visibility=True)
     lookup_field = "id"
+
+    def get_permissions(self):
+        # Anyone (incl. signed-out visitors) may browse teacher profiles;
+        # updating a profile still requires authentication.
+        if self.action in ("list", "retrieve"):
+            return [AllowAny()]
+        return [IsAuthenticated()]
 
     def get_queryset(self):
         """Show all visible teacher profiles for browsing."""
