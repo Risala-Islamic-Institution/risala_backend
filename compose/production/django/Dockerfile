@@ -38,7 +38,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev
 
 # Python 'run' stage
-FROM python:3.13-slim-bookworm AS python-run-stage
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS python-run-stage
 
 ARG APP_HOME=/app
 
