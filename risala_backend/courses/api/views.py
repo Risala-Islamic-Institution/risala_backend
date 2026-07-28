@@ -32,7 +32,9 @@ class CourseViewSet(ListModelMixin, RetrieveModelMixin, CreateModelMixin, Update
 
     def get_queryset(self):
         user = self.request.user
-        qs = Course.objects.all().select_related("created_by__user")
+        qs = Course.objects.all().select_related("created_by__user").prefetch_related(
+            "modules", "modules__lessons"
+        )
         if hasattr(user, "teacher_profile"):
             # Teacher sees own courses
             return qs.filter(created_by=user.teacher_profile)
@@ -129,11 +131,18 @@ class EnrollmentViewSet(ListModelMixin, RetrieveModelMixin, CreateModelMixin, Up
 
     def get_queryset(self):
         user = self.request.user
+        base_qs = Enrollment.objects.prefetch_related(
+            "course__modules", "course__modules__lessons"
+        )
         if hasattr(user, "student_profile"):
-            return Enrollment.objects.filter(student=user.student_profile).select_related("course", "course__created_by__user")
+            return base_qs.filter(student=user.student_profile).select_related(
+                "course", "course__created_by__user"
+            )
         if hasattr(user, "teacher_profile"):
             # Teachers can view enrollments for their courses
-            return Enrollment.objects.filter(course__created_by=user.teacher_profile).select_related("course", "student__user")
+            return base_qs.filter(course__created_by=user.teacher_profile).select_related(
+                "course", "student__user"
+            )
         return Enrollment.objects.none()
 
     def get_serializer_class(self):
