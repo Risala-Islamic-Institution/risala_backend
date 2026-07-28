@@ -19,6 +19,12 @@ attrs==25.4.0
     #   referencing
 billiard==4.2.4
     # via celery
+boto3==1.43.57
+    # via django-storages
+botocore==1.43.57
+    # via
+    #   boto3
+    #   s3transfer
 celery==5.6.2
     # via
     #   django-celery-beat
@@ -74,6 +80,7 @@ django==5.2.10
     #   django-crispy-forms
     #   django-model-utils
     #   django-redis
+    #   django-storages
     #   django-timezone-field
     #   djangorestframework
     #   drf-spectacular
@@ -97,6 +104,8 @@ django-environ==0.12.0
 django-model-utils==5.0.0
     # via risala-backend
 django-redis==6.0.0
+    # via risala-backend
+django-storages==1.14.6
     # via risala-backend
 django-timezone-field==7.2.1
     # via django-celery-beat
@@ -132,6 +141,10 @@ idna==3.11
     #   requests
 inflection==0.5.1
     # via drf-spectacular
+jmespath==1.1.0
+    # via
+    #   boto3
+    #   botocore
 jsonschema==4.26.0
     # via drf-spectacular
 jsonschema-specifications==2025.9.1
@@ -161,7 +174,9 @@ pyjwt==2.11.0
 python-crontab==3.3.0
     # via django-celery-beat
 python-dateutil==2.9.0.post0
-    # via celery
+    # via
+    #   botocore
+    #   celery
 python-dotenv==1.2.1
     # via uvicorn
 python-slugify==8.0.4
@@ -191,6 +206,8 @@ rpds-py==0.30.0
     # via
     #   jsonschema
     #   referencing
+s3transfer==0.19.2
+    # via boto3
 sentry-sdk==2.50.0
     # via risala-backend
 six==1.17.0
@@ -220,6 +237,7 @@ uritemplate==4.2.0
     # via drf-spectacular
 urllib3==2.6.3
     # via
+    #   botocore
     #   django-anymail
     #   requests
     #   sentry-sdk
