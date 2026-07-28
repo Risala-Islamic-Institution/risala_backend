@@ -86,17 +86,35 @@ SECURE_CONTENT_TYPE_NOSNIFF = env.bool(
 
 # STATIC & MEDIA
 # ------------------------
-STORAGES = {
-    "default": {
-        "BACKEND": "django.core.files.storage.FileSystemStorage",
-    },
-    "staticfiles": {
-        # Non-manifest storage: with the manifest variant, a boot that
-        # precedes collectstatic makes every template page 500 on the
-        # missing manifest. Cache-busting hashes aren't worth that here.
-        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
-    },
-}
+# STORAGES
+# ------------------------------------------------------------------------------
+# https://django-storages.readthedocs.io/en/latest/backends/amazon-S3.html
+AWS_ACCESS_KEY_ID = env("AWS_ACCESS_KEY_ID", default=None)
+AWS_SECRET_ACCESS_KEY = env("AWS_SECRET_ACCESS_KEY", default=None)
+AWS_STORAGE_BUCKET_NAME = env("AWS_STORAGE_BUCKET_NAME", default=None)
+AWS_S3_ENDPOINT_URL = env("AWS_S3_ENDPOINT_URL", default=None)
+AWS_S3_REGION_NAME = env("AWS_S3_REGION_NAME", default=None)
+AWS_QUERYSTRING_AUTH = False
+AWS_S3_FILE_OVERWRITE = False
+
+if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY and AWS_STORAGE_BUCKET_NAME:
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.s3.S3Boto3Storage",
+        },
+        "staticfiles": {
+            "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+        },
+    }
+else:
+    STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+        },
+        "staticfiles": {
+            "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+        },
+    }
 # Static files are collected in a background thread shortly after boot
 # (see config/wsgi.py); re-scan the directory instead of indexing it once
 # at startup so those files are served without a worker restart.
