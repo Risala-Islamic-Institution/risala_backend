@@ -96,7 +96,7 @@ class TeacherProfileViewSet(
 
     def get_queryset(self):
         """Show all visible teacher profiles for browsing."""
-        queryset = TeacherProfile.objects.filter(profile_visibility=True)
+        queryset = TeacherProfile.objects.filter(profile_visibility=True).select_related("user")
 
         # Filter by specialization
         specialization = self.request.query_params.get("specialization")
@@ -216,14 +216,13 @@ class SessionBookingViewSet(
 
     def get_queryset(self):
         user = self.request.user
+        base_qs = SessionBooking.objects.select_related(
+            "teacher", "teacher__user", "student", "student__user"
+        )
         if hasattr(user, "student_profile"):
-            return SessionBooking.objects.filter(student=user.student_profile).order_by(
-                "start_at"
-            )
+            return base_qs.filter(student=user.student_profile).order_by("start_at")
         if hasattr(user, "teacher_profile"):
-            return SessionBooking.objects.filter(teacher=user.teacher_profile).order_by(
-                "start_at"
-            )
+            return base_qs.filter(teacher=user.teacher_profile).order_by("start_at")
         return SessionBooking.objects.none()
 
     def perform_create(self, serializer):
