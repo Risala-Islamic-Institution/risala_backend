@@ -44,8 +44,13 @@ class CourseModuleSerializer(serializers.ModelSerializer):
 
 
 class CourseSerializer(serializers.ModelSerializer):
-    created_by = UserSerializer(source="created_by.user", read_only=True)
+    created_by = serializers.SerializerMethodField()
     modules = CourseModuleSerializer(many=True, read_only=True)
+
+    def get_created_by(self, obj):
+        if obj.created_by and hasattr(obj.created_by, "user") and obj.created_by.user:
+            return UserSerializer(obj.created_by.user).data
+        return None
 
     class Meta:
         model = Course
