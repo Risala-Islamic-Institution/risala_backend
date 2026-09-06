@@ -341,8 +341,9 @@ class StripeWebhookView(View):
 
 class VerifyPaymentView(APIView):
     """
-    Fallback endpoint to verify payment status if webhook is delayed/failed.
-    The student's dashboard can call this using the session_id in the URL.
+    Authoritative verification endpoint.
+    Retrieves the checkout session directly from Stripe's servers using the private secret key,
+    ensures ownership matches the requesting user, and idempotently triggers completion.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -352,17 +353,35 @@ class VerifyPaymentView(APIView):
             return Response({"error": "session_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            # Retrieve session from Stripe
+            # 1. Authoritative retrieval directly from Stripe
             session = stripe.checkout.Session.retrieve(session_id)
             
+            # 2. Security Check: Validate user ownership if client_reference_id is present
+            if session.client_reference_id and str(session.client_reference_id) != str(request.user.id):
+                return Response(
+                    {"error": "Unauthorized: This payment session belongs to another user."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            # 3. Authoritative Stripe payment status evaluation
             if session.payment_status == "paid":
-                # Trigger completion logic (idempotent)
+                # Trigger completion logic (strictly idempotent)
                 handler = StripeWebhookView()
                 handler.handle_checkout_session_completed(session)
-                return Response({"status": "paid", "message": "Payment verified and status updated."})
+                return Response({
+                    "status": "paid",
+                    "payment_status": "paid",
+                    "message": "Payment verified and order confirmed successfully."
+                })
             else:
-                return Response({"status": session.payment_status, "message": "Payment not completed yet."})
+                return Response({
+                    "status": session.payment_status,
+                    "payment_status": session.payment_status,
+                    "message": "Payment has not been completed on Stripe."
+                }, status=status.HTTP_200_OK)
 
+        except stripe.error.InvalidRequestError as e:
+            return Response({"error": f"Invalid Stripe session: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            print(f"ERROR: Manual verification failed: {str(e)}", flush=True)
+            print(f"ERROR: Payment verification failed: {str(e)}", flush=True)
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
