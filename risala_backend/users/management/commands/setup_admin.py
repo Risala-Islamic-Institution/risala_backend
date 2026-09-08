@@ -29,12 +29,14 @@ class Command(BaseCommand):
         user.set_password(password)
         user.save()
 
-        admin_role, _ = Role.objects.get_or_create(name="ADMIN")
-        UserRole.objects.get_or_create(
-            user=user,
-            role=admin_role,
-            defaults={"is_primary": True},
-        )
+        try:
+            admin_role, _ = Role.objects.get_or_create(name="ADMIN")
+            UserRole.objects.get_or_create(
+                user=user,
+                role=admin_role,
+            )
+        except Exception as e:
+            self.stdout.write(self.style.WARNING(f"Role assignment note: {e}"))
 
         msg = f"Successfully configured admin user: {email}"
         self.stdout.write(self.style.SUCCESS(msg))

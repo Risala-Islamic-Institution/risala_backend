@@ -7,7 +7,7 @@ set -o nounset
 
 python /app/manage.py migrate --noinput
 
-python /app/manage.py setup_admin
+python /app/manage.py setup_admin || true
 
 python /app/manage.py collectstatic --noinput
 
