@@ -16,7 +16,6 @@ class LessonSerializer(serializers.ModelSerializer):
             "duration_minutes",
             "requires_attendance",
             "is_free_preview",
-            "is_free_preview",
             "order",
             "start_marker",
             "end_marker",
@@ -26,6 +25,19 @@ class LessonSerializer(serializers.ModelSerializer):
 
 class CourseModuleSerializer(serializers.ModelSerializer):
     lessons = LessonSerializer(many=True, read_only=True)
+    file = serializers.SerializerMethodField()
+
+    def get_file(self, obj):
+        if not obj.file:
+            return None
+        try:
+            url = obj.file.url
+            request = self.context.get("request")
+            if request is not None:
+                return request.build_absolute_uri(url)
+            return url
+        except Exception:
+            return str(obj.file)
 
     class Meta:
         model = CourseModule
@@ -36,7 +48,6 @@ class CourseModuleSerializer(serializers.ModelSerializer):
             "learning_objectives",
             "estimated_duration",
             "is_mandatory",
-            "is_mandatory",
             "file",
             "lessons",
         ]
@@ -45,12 +56,28 @@ class CourseModuleSerializer(serializers.ModelSerializer):
 
 class CourseSerializer(serializers.ModelSerializer):
     created_by = serializers.SerializerMethodField()
+    thumbnail = serializers.SerializerMethodField()
     modules = CourseModuleSerializer(many=True, read_only=True)
 
     def get_created_by(self, obj):
-        if obj.created_by and hasattr(obj.created_by, "user") and obj.created_by.user:
-            return UserSerializer(obj.created_by.user).data
+        try:
+            if obj.created_by and hasattr(obj.created_by, "user") and obj.created_by.user:
+                return UserSerializer(obj.created_by.user).data
+        except Exception:
+            pass
         return None
+
+    def get_thumbnail(self, obj):
+        if not obj.thumbnail:
+            return None
+        try:
+            url = obj.thumbnail.url
+            request = self.context.get("request")
+            if request is not None:
+                return request.build_absolute_uri(url)
+            return url
+        except Exception:
+            return str(obj.thumbnail)
 
     class Meta:
         model = Course

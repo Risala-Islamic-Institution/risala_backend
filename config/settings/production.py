@@ -100,7 +100,7 @@ AWS_S3_FILE_OVERWRITE = False
 if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY and AWS_STORAGE_BUCKET_NAME:
     STORAGES = {
         "default": {
-            "BACKEND": "storages.backends.s3.S3Boto3Storage",
+            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
         },
         "staticfiles": {
             "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",

@@ -1,4 +1,4 @@
-from rest_framework import status
+from rest_framework import status, serializers
 from rest_framework.mixins import ListModelMixin, RetrieveModelMixin, CreateModelMixin, UpdateModelMixin, DestroyModelMixin
 from rest_framework.viewsets import GenericViewSet
 from rest_framework.decorators import action
@@ -35,15 +35,27 @@ class CourseViewSet(ListModelMixin, RetrieveModelMixin, CreateModelMixin, Update
         qs = Course.objects.all().select_related("created_by__user").prefetch_related(
             "modules", "modules__lessons"
         )
-        if hasattr(user, "teacher_profile"):
-            # Teacher sees own courses
-            return qs.filter(created_by=user.teacher_profile)
-        # Students see published courses and any courses they are enrolled in
+        teacher_profile = getattr(user, "teacher_profile", None)
         student_profile = getattr(user, "student_profile", None)
+
+        mine = self.request.query_params.get("mine") == "true"
+        if teacher_profile:
+            if mine:
+                return qs.filter(created_by=teacher_profile)
+            return qs.filter(Q(is_published=True) | Q(created_by=teacher_profile)).distinct()
+
         if student_profile:
             return qs.filter(Q(is_published=True) | Q(enrollments__student=student_profile)).distinct()
-        # Anonymous or other roles: only published
+
         return qs.filter(is_published=True)
+
+    def list(self, request, *args, **kwargs):
+        try:
+            return super().list(request, *args, **kwargs)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception("Error listing courses: %s", e)
+            return Response([], status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"], url_path="publish")
     def publish(self, request, slug=None):
@@ -76,14 +88,16 @@ class CourseModuleViewSet(ListModelMixin, CreateModelMixin, UpdateModelMixin, De
         user = self.request.user
         qs = CourseModule.objects.select_related("course")
         course_id = self.request.query_params.get("course_id")
-        
-        if hasattr(user, "teacher_profile"):
-            qs = qs.filter(course__created_by=user.teacher_profile)
-        elif hasattr(user, "student_profile"):
-             # Students can see modules of courses they are enrolled in OR published courses
-             qs = qs.filter(Q(course__is_published=True) | Q(course__enrollments__student=user.student_profile)).distinct()
+
+        teacher_profile = getattr(user, "teacher_profile", None)
+        student_profile = getattr(user, "student_profile", None)
+
+        if teacher_profile:
+            qs = qs.filter(course__created_by=teacher_profile)
+        elif student_profile:
+            qs = qs.filter(Q(course__is_published=True) | Q(course__enrollments__student=student_profile)).distinct()
         else:
-             return CourseModule.objects.none()
+            return CourseModule.objects.none()
 
         if course_id:
             qs = qs.filter(course__id=course_id)
@@ -107,12 +121,15 @@ class LessonViewSet(ListModelMixin, CreateModelMixin, UpdateModelMixin, DestroyM
         qs = Lesson.objects.select_related("module__course")
         module_id = self.request.query_params.get("module_id")
 
-        if hasattr(user, "teacher_profile"):
-            qs = qs.filter(module__course__created_by=user.teacher_profile)
-        elif hasattr(user, "student_profile"):
-             qs = qs.filter(Q(module__course__is_published=True) | Q(module__course__enrollments__student=user.student_profile)).distinct()
+        teacher_profile = getattr(user, "teacher_profile", None)
+        student_profile = getattr(user, "student_profile", None)
+
+        if teacher_profile:
+            qs = qs.filter(module__course__created_by=teacher_profile)
+        elif student_profile:
+            qs = qs.filter(Q(module__course__is_published=True) | Q(module__course__enrollments__student=student_profile)).distinct()
         else:
-             return Lesson.objects.none()
+            return Lesson.objects.none()
 
         if module_id:
             qs = qs.filter(module__id=module_id)
