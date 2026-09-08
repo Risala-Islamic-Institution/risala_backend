@@ -239,6 +239,39 @@ class TeacherProfile(TimeStampedModel, UUIDModel):
         verbose_name = "Teacher Profile"
         verbose_name_plural = "Teacher Profiles"
 
+    def compute_total_students(self):
+        """Compute the distinct number of students associated with this teacher via bookings, orders, or course enrollments."""
+        student_ids = set()
+        try:
+            session_students = self.session_bookings.exclude(
+                status__in=["CANCELLED", "DECLINED", "EXPIRED"]
+            ).values_list("student_id", flat=True)
+            student_ids.update(session_students)
+        except Exception:
+            pass
+
+        try:
+            order_students = self.booking_orders.exclude(
+                status__in=["FAILED", "EXPIRED"]
+            ).values_list("student_id", flat=True)
+            student_ids.update(order_students)
+        except Exception:
+            pass
+
+        try:
+            from risala_backend.courses.models import Enrollment
+            course_students = Enrollment.objects.filter(
+                course__created_by=self
+            ).exclude(
+                status="CANCELLED"
+            ).values_list("student_id", flat=True)
+            student_ids.update(course_students)
+        except Exception:
+            pass
+
+        computed = len(student_ids)
+        return max(computed, self.total_students or 0)
+
     def __str__(self):
         return f"Teacher: {self.user.full_name or self.user.username}"
 

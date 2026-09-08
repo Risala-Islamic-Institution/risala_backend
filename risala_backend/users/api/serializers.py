@@ -211,6 +211,7 @@ class TeacherProfileSerializer(serializers.ModelSerializer):
     """Serializer for TeacherProfile."""
 
     user = UserSerializer(read_only=True)
+    total_students = serializers.SerializerMethodField()
 
     class Meta:
         model = TeacherProfile
@@ -237,6 +238,9 @@ class TeacherProfileSerializer(serializers.ModelSerializer):
             "verification_status",
             "created_at",
         ]
+
+    def get_total_students(self, obj):
+        return obj.compute_total_students()
 
 
 class StudentProfileSerializer(serializers.ModelSerializer):
