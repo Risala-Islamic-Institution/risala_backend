@@ -233,6 +233,8 @@ class TeacherProfile(TimeStampedModel, UUIDModel):
         related_name="verified_teachers",
     )
     verified_at = models.DateTimeField(null=True, blank=True)
+    audition_notes = models.TextField(blank=True)
+    recitation_score = models.PositiveIntegerField(null=True, blank=True)
     profile_visibility = models.BooleanField(default=True)
 
     class Meta:
@@ -539,3 +541,13 @@ class TimeSlot(TimeStampedModel, UUIDModel):
 
     def __str__(self):
         return f"{self.teacher.user.username} - {self.start_time.strftime('%Y-%m-%d %H:%M')}"
+
+
+# Import attendance & escrow models for discovery by Django models
+from risala_backend.users.models_attendance import (  # noqa: E402
+    SessionAttendance,
+    AttendanceHeartbeat,
+    TeacherPayoutLedger,
+    SessionExcuse,
+)
+

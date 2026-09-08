@@ -18,19 +18,40 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
-from risala_backend.users.models import (BookingOrder, Notification,
-                                         SessionBooking, StudentProfile,
-                                         TeacherAvailability, TeacherProfile,
-                                         TimeSlot, User)
+from risala_backend.users.models import (
+    BookingOrder,
+    Notification,
+    SessionBooking,
+    StudentProfile,
+    TeacherAvailability,
+    TeacherProfile,
+    TimeSlot,
+    User,
+    SessionAttendance,
+    AttendanceHeartbeat,
+    TeacherPayoutLedger,
+    SessionExcuse,
+)
 
-from .serializers import (BookingOrderSerializer, BookingPackageSerializer,
-                          BulkSlotCreateSerializer, BulkSlotDeleteSerializer,
-                          NotificationSerializer, RangeBookingRequestSerializer,
-                          SessionBookingSerializer,
-                          StudentProfileSerializer,
-                          TeacherAvailabilitySerializer,
-                          TeacherProfileSerializer, TimeSlotSerializer,
-                          UserSerializer)
+from .serializers import (
+    BookingOrderSerializer,
+    BookingPackageSerializer,
+    BulkSlotCreateSerializer,
+    BulkSlotDeleteSerializer,
+    NotificationSerializer,
+    RangeBookingRequestSerializer,
+    SessionBookingSerializer,
+    StudentProfileSerializer,
+    TeacherAvailabilitySerializer,
+    TeacherProfileSerializer,
+    TimeSlotSerializer,
+    UserSerializer,
+    AttendanceHeartbeatSerializer,
+    SessionAttendanceSerializer,
+    TeacherPayoutLedgerSerializer,
+    SessionExcuseSerializer,
+    TeacherAuditionSerializer,
+)
 
 
 class UserViewSet(RetrieveModelMixin, ListModelMixin, UpdateModelMixin, GenericViewSet):
@@ -209,7 +230,7 @@ class TeacherAvailabilityViewSet(
 
 
 class SessionBookingViewSet(
-    CreateModelMixin, ListModelMixin, UpdateModelMixin, GenericViewSet
+    CreateModelMixin, RetrieveModelMixin, ListModelMixin, UpdateModelMixin, GenericViewSet
 ):
     serializer_class = SessionBookingSerializer
     permission_classes = [IsAuthenticated]
@@ -219,6 +240,8 @@ class SessionBookingViewSet(
         base_qs = SessionBooking.objects.select_related(
             "teacher", "teacher__user", "student", "student__user"
         )
+        if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False) or (hasattr(user, "has_role") and user.has_role("ADMIN")):
+            return base_qs.order_by("-start_at")
         if hasattr(user, "student_profile"):
             return base_qs.filter(student=user.student_profile).order_by("start_at")
         if hasattr(user, "teacher_profile"):
@@ -704,12 +727,136 @@ class SessionBookingViewSet(
         with transaction.atomic():
             booking.status = SessionBooking.Status.COMPLETED
             booking.save(update_fields=["status", "updated_at"])
-            
-            # TODO: Phase 11 Escrow Payout logic will be integrated here
-            # For now, just mark the teacher's total earnings or let a separate signal/job handle it.
+
+            attendance, _ = SessionAttendance.objects.get_or_create(booking=booking)
+            attendance.evaluate_attendance()
+
+            gross = booking.hourly_rate or Decimal("10.00")
+            if gross <= Decimal("0.00"):
+                gross = Decimal("10.00")
+            platform_fee = (gross * Decimal("10.00")) / Decimal("100.00")
+            teacher_net = gross - platform_fee
+
+            ledger, _ = TeacherPayoutLedger.objects.get_or_create(
+                booking=booking,
+                teacher=booking.teacher,
+                defaults={
+                    "gross_amount": gross,
+                    "platform_fee_percent": Decimal("10.00"),
+                    "platform_fee_amount": platform_fee,
+                    "teacher_net_amount": teacher_net,
+                    "status": TeacherPayoutLedger.Status.PAYABLE,
+                },
+            )
+            if attendance.verdict == SessionAttendance.Verdict.VERIFIED_COMPLETE:
+                ledger.status = TeacherPayoutLedger.Status.PAYABLE
+                ledger.save(update_fields=["status", "updated_at"])
 
         serializer = self.get_serializer(booking)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="attendance/heartbeat")
+    def attendance_heartbeat(self, request, pk=None):
+        booking = self.get_object()
+        user = request.user
+
+        is_teacher = hasattr(user, "teacher_profile") and booking.teacher_id == user.teacher_profile.id
+        is_student = hasattr(user, "student_profile") and booking.student_id == user.student_profile.id
+        is_admin = getattr(user, "is_staff", False) or getattr(user, "is_superuser", False) or (hasattr(user, "has_role") and user.has_role("ADMIN"))
+
+        if not (is_teacher or is_student or is_admin):
+            return Response({"detail": "Not a participant in this booking."}, status=status.HTTP_403_FORBIDDEN)
+
+        role_label = "TEACHER" if is_teacher else ("STUDENT" if is_student else "ADMIN")
+        event_type = request.data.get("event_type", AttendanceHeartbeat.EventType.PING)
+        is_mic_active = bool(request.data.get("is_mic_active", True))
+        is_camera_active = bool(request.data.get("is_camera_active", True))
+        other_participant_detected = bool(request.data.get("other_participant_detected", False))
+
+        with transaction.atomic():
+            attendance, _ = SessionAttendance.objects.select_for_update().get_or_create(booking=booking)
+            now = timezone.now()
+
+            if is_teacher:
+                if not attendance.teacher_joined_at or event_type == AttendanceHeartbeat.EventType.JOIN:
+                    attendance.teacher_joined_at = attendance.teacher_joined_at or now
+                attendance.teacher_heartbeat_count += 1
+                attendance.teacher_minutes_present = max(attendance.teacher_minutes_present + 3, 3)
+                if event_type == AttendanceHeartbeat.EventType.LEAVE:
+                    attendance.teacher_left_at = now
+            elif is_student:
+                if not attendance.student_joined_at or event_type == AttendanceHeartbeat.EventType.JOIN:
+                    attendance.student_joined_at = attendance.student_joined_at or now
+                attendance.student_heartbeat_count += 1
+                attendance.student_minutes_present = max(attendance.student_minutes_present + 3, 3)
+                if event_type == AttendanceHeartbeat.EventType.LEAVE:
+                    attendance.student_left_at = now
+
+            attendance.save()
+
+            AttendanceHeartbeat.objects.create(
+                attendance=attendance,
+                user=user,
+                role=role_label,
+                event_type=event_type,
+                is_mic_active=is_mic_active,
+                is_camera_active=is_camera_active,
+                other_participant_detected=other_participant_detected,
+            )
+
+            if event_type == AttendanceHeartbeat.EventType.LEAVE or now >= booking.end_at:
+                attendance.evaluate_attendance()
+
+            gross = booking.hourly_rate or Decimal("10.00")
+            if gross <= Decimal("0.00"):
+                gross = Decimal("10.00")
+            platform_fee = (gross * Decimal("10.00")) / Decimal("100.00")
+            teacher_net = gross - platform_fee
+
+            ledger, _ = TeacherPayoutLedger.objects.get_or_create(
+                booking=booking,
+                teacher=booking.teacher,
+                defaults={
+                    "gross_amount": gross,
+                    "platform_fee_percent": Decimal("10.00"),
+                    "platform_fee_amount": platform_fee,
+                    "teacher_net_amount": teacher_net,
+                    "status": TeacherPayoutLedger.Status.HELD,
+                },
+            )
+            if attendance.verdict == SessionAttendance.Verdict.VERIFIED_COMPLETE:
+                ledger.status = TeacherPayoutLedger.Status.PAYABLE
+                ledger.save(update_fields=["status", "updated_at"])
+            elif attendance.verdict == SessionAttendance.Verdict.TEACHER_ABSENT:
+                ledger.status = TeacherPayoutLedger.Status.REFUNDED
+                ledger.save(update_fields=["status", "updated_at"])
+
+        return Response(SessionAttendanceSerializer(attendance).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"], url_path="attendance")
+    def get_attendance(self, request, pk=None):
+        booking = self.get_object()
+        attendance, _ = SessionAttendance.objects.get_or_create(booking=booking)
+        return Response(SessionAttendanceSerializer(attendance).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="submit-excuse")
+    def submit_excuse(self, request, pk=None):
+        booking = self.get_object()
+        reason = request.data.get("reason", "").strip()
+        explanation = request.data.get("explanation", "").strip()
+        if not reason or not explanation:
+            return Response(
+                {"error": "Both reason and explanation are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        excuse = SessionExcuse.objects.create(
+            booking=booking,
+            submitted_by=request.user,
+            reason=reason,
+            explanation=explanation,
+        )
+        return Response(SessionExcuseSerializer(excuse).data, status=status.HTTP_201_CREATED)
+
 
 
 
@@ -1142,3 +1289,293 @@ class TimeSlotViewSet(ListModelMixin, DestroyModelMixin, GenericViewSet):
             },
             status=status.HTTP_200_OK,
         )
+
+
+def _is_admin_user(user):
+    return bool(
+        user
+        and user.is_authenticated
+        and (
+            getattr(user, "is_staff", False)
+            or getattr(user, "is_superuser", False)
+            or (hasattr(user, "has_role") and user.has_role("ADMIN"))
+        )
+    )
+
+
+class AdminTeacherAuditionViewSet(viewsets.ModelViewSet):
+    """
+    Platform Owner / Admin viewset for reviewing candidate teacher applications
+    and conducting live recitation auditions before approving accounts.
+    """
+
+    serializer_class = TeacherAuditionSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = TeacherProfile.objects.select_related("user").all().order_by("-created_at")
+
+    def get_queryset(self):
+        if not _is_admin_user(self.request.user):
+            return TeacherProfile.objects.none()
+        qs = super().get_queryset()
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            qs = qs.filter(verification_status=status_param.upper())
+        return qs
+
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, pk=None):
+        if not _is_admin_user(request.user):
+            return Response({"detail": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
+        teacher = self.get_object()
+        notes = request.data.get("audition_notes", "")
+        recitation_score = request.data.get("recitation_score")
+
+        teacher.verification_status = TeacherProfile.VerificationStatus.VERIFIED
+        teacher.verified_by = request.user
+        teacher.verified_at = timezone.now()
+        if notes:
+            teacher.audition_notes = notes
+        if recitation_score is not None:
+            try:
+                teacher.recitation_score = int(recitation_score)
+            except (ValueError, TypeError):
+                pass
+        teacher.save()
+
+        # Send approval notification to teacher
+        if teacher.user:
+            Notification.objects.create(
+                user=teacher.user,
+                title="Audition Approved! Welcome to Risala",
+                body="Masha'Allah! Your live recitation audition has been verified and approved by the Risala Academy Admin. You can now publish your schedule and teach students.",
+            )
+
+        return Response(self.get_serializer(teacher).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject(self, request, pk=None):
+        if not _is_admin_user(request.user):
+            return Response({"detail": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
+        teacher = self.get_object()
+        notes = request.data.get("audition_notes", "")
+        teacher.verification_status = TeacherProfile.VerificationStatus.REJECTED
+        teacher.verified_by = request.user
+        teacher.verified_at = timezone.now()
+        if notes:
+            teacher.audition_notes = notes
+        teacher.save()
+
+        if teacher.user:
+            Notification.objects.create(
+                user=teacher.user,
+                title="Application Status Update",
+                body=f"Your teacher application status has been reviewed. Notes: {notes or 'Requires further Tajweed mastery.'}",
+            )
+
+        return Response(self.get_serializer(teacher).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="score-audition")
+    def score_audition(self, request, pk=None):
+        if not _is_admin_user(request.user):
+            return Response({"detail": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
+        teacher = self.get_object()
+        notes = request.data.get("audition_notes")
+        score = request.data.get("recitation_score")
+        if notes is not None:
+            teacher.audition_notes = notes
+        if score is not None:
+            try:
+                teacher.recitation_score = int(score)
+            except (ValueError, TypeError):
+                pass
+        teacher.save()
+        return Response(self.get_serializer(teacher).data, status=status.HTTP_200_OK)
+
+
+class AdminAttendanceMonitorViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Platform Owner / Admin viewset for auditing live classroom attendance,
+    viewing presence metrics, and overriding automated verdicts.
+    """
+
+    serializer_class = SessionAttendanceSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = SessionAttendance.objects.select_related(
+        "booking",
+        "booking__teacher",
+        "booking__teacher__user",
+        "booking__student",
+        "booking__student__user",
+    ).all().order_by("-created_at")
+
+    def get_queryset(self):
+        if not _is_admin_user(self.request.user):
+            return SessionAttendance.objects.none()
+        qs = super().get_queryset()
+        verdict_param = self.request.query_params.get("verdict")
+        if verdict_param:
+            qs = qs.filter(verdict=verdict_param.upper())
+        return qs
+
+    @action(detail=True, methods=["post"], url_path="override-verdict")
+    def override_verdict(self, request, pk=None):
+        if not _is_admin_user(request.user):
+            return Response({"detail": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
+        attendance = self.get_object()
+        verdict = request.data.get("verdict")
+        settlement_status = request.data.get("settlement_status")
+        notes = request.data.get("admin_notes", "")
+
+        if verdict and hasattr(SessionAttendance.Verdict, verdict):
+            attendance.verdict = verdict
+        if settlement_status and hasattr(SessionAttendance.SettlementStatus, settlement_status):
+            attendance.settlement_status = settlement_status
+        if notes:
+            attendance.admin_notes = notes
+        attendance.evaluated_at = timezone.now()
+        attendance.save()
+
+        # Update linked TeacherPayoutLedger
+        ledger = getattr(attendance.booking, "payout_ledger", None)
+        if ledger:
+            if attendance.verdict == SessionAttendance.Verdict.VERIFIED_COMPLETE:
+                ledger.status = TeacherPayoutLedger.Status.PAYABLE
+            elif attendance.verdict == SessionAttendance.Verdict.TEACHER_ABSENT:
+                ledger.status = TeacherPayoutLedger.Status.REFUNDED
+            elif attendance.verdict == SessionAttendance.Verdict.EXCUSED:
+                ledger.status = TeacherPayoutLedger.Status.CANCELLED
+            ledger.save(update_fields=["status", "updated_at"])
+
+        return Response(self.get_serializer(attendance).data, status=status.HTTP_200_OK)
+
+
+class AdminEscrowLedgerViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Platform Owner / Admin financial ledger:
+    - 10% platform fee
+    - 90% teacher payouts
+    - Escrow settlement
+    """
+
+    serializer_class = TeacherPayoutLedgerSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = TeacherPayoutLedger.objects.select_related(
+        "booking",
+        "teacher",
+        "teacher__user",
+    ).all().order_by("-created_at")
+
+    def get_queryset(self):
+        if not _is_admin_user(self.request.user):
+            return TeacherPayoutLedger.objects.none()
+        qs = super().get_queryset()
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            qs = qs.filter(status=status_param.upper())
+        return qs
+
+    @action(detail=False, methods=["get"], url_path="summary")
+    def summary(self, request):
+        if not _is_admin_user(request.user):
+            return Response({"detail": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
+        qs = self.get_queryset()
+
+        total_escrow_held = sum((item.gross_amount for item in qs.filter(status=TeacherPayoutLedger.Status.HELD)), Decimal("0.00"))
+        total_commission = sum((item.platform_fee_amount for item in qs.filter(status__in=[TeacherPayoutLedger.Status.PAYABLE, TeacherPayoutLedger.Status.SETTLED])), Decimal("0.00"))
+        total_payable = sum((item.teacher_net_amount for item in qs.filter(status=TeacherPayoutLedger.Status.PAYABLE)), Decimal("0.00"))
+        total_settled = sum((item.teacher_net_amount for item in qs.filter(status=TeacherPayoutLedger.Status.SETTLED)), Decimal("0.00"))
+        total_refunded = sum((item.gross_amount for item in qs.filter(status=TeacherPayoutLedger.Status.REFUNDED)), Decimal("0.00"))
+
+        return Response(
+            {
+                "total_escrow_held": str(total_escrow_held),
+                "total_commission_earned": str(total_commission),
+                "total_payable_to_teachers": str(total_payable),
+                "total_settled": str(total_settled),
+                "total_refunded": str(total_refunded),
+                "pending_disbursements_count": qs.filter(status=TeacherPayoutLedger.Status.PAYABLE).count(),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="mark-settled")
+    def mark_settled(self, request, pk=None):
+        if not _is_admin_user(request.user):
+            return Response({"detail": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
+        ledger = self.get_object()
+        ledger.status = TeacherPayoutLedger.Status.SETTLED
+        ledger.disbursed_at = timezone.now()
+        ledger.notes = request.data.get("notes", ledger.notes)
+        ledger.save()
+        return Response(self.get_serializer(ledger).data, status=status.HTTP_200_OK)
+
+
+class AdminExcuseViewSet(viewsets.ModelViewSet):
+    """
+    Platform Owner / Admin viewset for reviewing emergency student/teacher excuses.
+    """
+
+    serializer_class = SessionExcuseSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = SessionExcuse.objects.select_related(
+        "booking",
+        "submitted_by",
+        "reviewed_by",
+    ).all().order_by("-created_at")
+
+    def get_queryset(self):
+        if not _is_admin_user(self.request.user):
+            return SessionExcuse.objects.none()
+        qs = super().get_queryset()
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            qs = qs.filter(status=status_param.upper())
+        return qs
+
+    @action(detail=True, methods=["post"], url_path="review")
+    def review(self, request, pk=None):
+        if not _is_admin_user(request.user):
+            return Response({"detail": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
+        excuse = self.get_object()
+        decision = request.data.get("status", "").upper()
+        review_notes = request.data.get("review_notes", "")
+
+        if decision not in {SessionExcuse.Status.APPROVED, SessionExcuse.Status.REJECTED}:
+            return Response(
+                {"error": "Status must be APPROVED or REJECTED."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        excuse.status = decision
+        excuse.reviewed_by = request.user
+        excuse.reviewed_at = timezone.now()
+        excuse.review_notes = review_notes
+        excuse.save()
+
+        # If approved, update attendance and notification
+        if decision == SessionExcuse.Status.APPROVED:
+            attendance, _ = SessionAttendance.objects.get_or_create(booking=excuse.booking)
+            attendance.verdict = SessionAttendance.Verdict.EXCUSED
+            attendance.settlement_status = SessionAttendance.SettlementStatus.CREDITED_RESCHEDULE
+            attendance.save()
+
+            ledger = getattr(excuse.booking, "payout_ledger", None)
+            if ledger:
+                ledger.status = TeacherPayoutLedger.Status.CANCELLED
+                ledger.save(update_fields=["status", "updated_at"])
+
+            # Notify user who submitted excuse
+            Notification.objects.create(
+                user=excuse.submitted_by,
+                title="Excuse Approved",
+                body=f"Your excuse for session on {excuse.booking.start_at} was approved by Admin. You are credited for a reschedule.",
+            )
+        else:
+            Notification.objects.create(
+                user=excuse.submitted_by,
+                title="Excuse Declined",
+                body=f"Your excuse for session on {excuse.booking.start_at} was declined. Note: {review_notes}",
+            )
+
+        return Response(self.get_serializer(excuse).data, status=status.HTTP_200_OK)
+

@@ -12,10 +12,21 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework import serializers as drf_serializers
 
-from risala_backend.users.models import (BookingOrder, Notification, Role,
-                                         SessionBooking, StudentProfile,
-                                         TeacherAvailability, TeacherProfile,
-                                         User, UserRole)
+from risala_backend.users.models import (
+    BookingOrder,
+    Notification,
+    Role,
+    SessionBooking,
+    StudentProfile,
+    TeacherAvailability,
+    TeacherProfile,
+    User,
+    UserRole,
+    SessionAttendance,
+    AttendanceHeartbeat,
+    TeacherPayoutLedger,
+    SessionExcuse,
+)
 
 
 class RoleSerializer(serializers.ModelSerializer):
@@ -46,13 +57,17 @@ class UserSerializer(serializers.ModelSerializer):
             "user_timezone",
             "preferred_language",
             "is_active",
+            "is_staff",
+            "is_superuser",
             "roles",
             "primary_role",
             "created_at",
         ]
-        read_only_fields = ["id", "is_active", "created_at"]
+        read_only_fields = ["id", "is_active", "is_staff", "is_superuser", "created_at"]
 
     def get_primary_role(self, obj):
+        if getattr(obj, "is_superuser", False) or getattr(obj, "is_staff", False) or obj.has_role("ADMIN"):
+            return "ADMIN"
         role = obj.get_primary_role()
         return role.name if role else None
 
@@ -563,3 +578,137 @@ class BulkSlotCreateSerializer(serializers.Serializer):
 class BulkSlotDeleteSerializer(serializers.Serializer):
     start_date = serializers.DateField(required=False)
     end_date = serializers.DateField(required=False)
+
+
+class AttendanceHeartbeatSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AttendanceHeartbeat
+        fields = [
+            "id",
+            "attendance",
+            "user",
+            "role",
+            "event_type",
+            "is_mic_active",
+            "is_camera_active",
+            "other_participant_detected",
+            "created_at",
+        ]
+        read_only_fields = ["id", "attendance", "user", "role", "created_at"]
+
+
+class SessionAttendanceSerializer(serializers.ModelSerializer):
+    booking_id = serializers.UUIDField(source="booking.id", read_only=True)
+    teacher_name = serializers.CharField(source="booking.teacher.user.full_name", read_only=True)
+    student_name = serializers.CharField(source="booking.student.user.full_name", read_only=True)
+    scheduled_start = serializers.DateTimeField(source="booking.start_at", read_only=True)
+    scheduled_end = serializers.DateTimeField(source="booking.end_at", read_only=True)
+
+    class Meta:
+        model = SessionAttendance
+        fields = [
+            "id",
+            "booking",
+            "booking_id",
+            "teacher_name",
+            "student_name",
+            "scheduled_start",
+            "scheduled_end",
+            "teacher_joined_at",
+            "teacher_left_at",
+            "teacher_minutes_present",
+            "teacher_heartbeat_count",
+            "student_joined_at",
+            "student_left_at",
+            "student_minutes_present",
+            "student_heartbeat_count",
+            "verdict",
+            "settlement_status",
+            "admin_notes",
+            "evaluated_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class TeacherPayoutLedgerSerializer(serializers.ModelSerializer):
+    teacher_name = serializers.CharField(source="teacher.user.full_name", read_only=True)
+    teacher_email = serializers.CharField(source="teacher.user.email", read_only=True)
+    booking_id = serializers.UUIDField(source="booking.id", read_only=True)
+    booking_start_at = serializers.DateTimeField(source="booking.start_at", read_only=True)
+
+    class Meta:
+        model = TeacherPayoutLedger
+        fields = [
+            "id",
+            "booking",
+            "booking_id",
+            "teacher",
+            "teacher_name",
+            "teacher_email",
+            "booking_start_at",
+            "gross_amount",
+            "platform_fee_percent",
+            "platform_fee_amount",
+            "teacher_net_amount",
+            "status",
+            "disbursed_at",
+            "notes",
+            "created_at",
+        ]
+        read_only_fields = ["id", "created_at"]
+
+
+class SessionExcuseSerializer(serializers.ModelSerializer):
+    submitted_by_name = serializers.CharField(source="submitted_by.full_name", read_only=True)
+    booking_start = serializers.DateTimeField(source="booking.start_at", read_only=True)
+
+    class Meta:
+        model = SessionExcuse
+        fields = [
+            "id",
+            "booking",
+            "booking_start",
+            "submitted_by",
+            "submitted_by_name",
+            "reason",
+            "explanation",
+            "status",
+            "reviewed_by",
+            "reviewed_at",
+            "review_notes",
+            "created_at",
+        ]
+        read_only_fields = ["id", "submitted_by", "reviewed_by", "reviewed_at", "created_at"]
+
+
+class TeacherAuditionSerializer(serializers.ModelSerializer):
+    user = UserSerializer(read_only=True)
+    jitsi_audition_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TeacherProfile
+        fields = [
+            "id",
+            "user",
+            "biography",
+            "qualifications",
+            "years_of_experience",
+            "teaching_languages",
+            "teaching_level",
+            "specialization",
+            "hourly_rate",
+            "verification_status",
+            "verified_by",
+            "verified_at",
+            "audition_notes",
+            "recitation_score",
+            "jitsi_audition_url",
+            "created_at",
+        ]
+        read_only_fields = ["id", "user", "verified_by", "verified_at", "created_at"]
+
+    def get_jitsi_audition_url(self, obj):
+        return f"https://meet.jit.si/risala-audition-{obj.id}"
+

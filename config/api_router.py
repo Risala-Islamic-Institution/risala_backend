@@ -9,6 +9,10 @@ from risala_backend.users.api.views import (
 	SessionBookingViewSet,
 	NotificationViewSet,
 	TimeSlotViewSet,
+	AdminTeacherAuditionViewSet,
+	AdminAttendanceMonitorViewSet,
+	AdminEscrowLedgerViewSet,
+	AdminExcuseViewSet,
 )
 from risala_backend.courses.api.views import CourseViewSet, CourseModuleViewSet, LessonViewSet, EnrollmentViewSet, LessonProgressViewSet, CertificateViewSet, QuizQuestionViewSet, QuizAttemptViewSet, CourseReviewViewSet, CourseAnnouncementViewSet, CourseQuestionViewSet, CourseAnswerViewSet
 
@@ -20,6 +24,10 @@ router.register("availability", TeacherAvailabilityViewSet, basename="availabili
 router.register("bookings", SessionBookingViewSet, basename="bookings")
 router.register("notifications", NotificationViewSet, basename="notifications")
 router.register("time-slots", TimeSlotViewSet, basename="time-slots")
+router.register("admin/teacher-auditions", AdminTeacherAuditionViewSet, basename="admin-teacher-auditions")
+router.register("admin/attendance-monitor", AdminAttendanceMonitorViewSet, basename="admin-attendance-monitor")
+router.register("admin/escrow-ledger", AdminEscrowLedgerViewSet, basename="admin-escrow-ledger")
+router.register("admin/excuses", AdminExcuseViewSet, basename="admin-excuses")
 router.register("courses", CourseViewSet, basename="courses")
 router.register("modules", CourseModuleViewSet, basename="modules")
 router.register("lessons", LessonViewSet, basename="lessons")
