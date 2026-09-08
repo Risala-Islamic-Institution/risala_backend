@@ -309,11 +309,53 @@ class StripeWebhookView(View):
                 if order.status == BookingOrder.Status.PAID:
                     return
 
+                amount_total_cents = session.get("amount_total")
+                expected_cents = int(order.total_amount * 100)
+
+                # Check if underpaid: student paid less than required total
+                if amount_total_cents is not None and amount_total_cents < expected_cents:
+                    print(f"WARNING: Underpayment detected for Order {order_id}. Paid: {amount_total_cents}, Expected: {expected_cents}", flush=True)
+                    payment, _ = Payment.objects.get_or_create(order=order)
+                    payment.stripe_payment_intent_id = session.get('payment_intent')
+                    payment.status = Payment.Status.FAILED
+                    payment.save()
+
+                    student_user = getattr(order.student, "user", None)
+                    if student_user:
+                        Notification.objects.create(
+                            user=student_user,
+                            title="Payment Incomplete",
+                            body=f"Your payment amount (${amount_total_cents/100:.2f}) is less than the required total (${order.total_amount:.2f}). Please contact support to resolve your payment.",
+                        )
+                    return
+
                 # Update Payment
                 payment, created = Payment.objects.get_or_create(order=order)
                 payment.stripe_payment_intent_id = session.get('payment_intent')
                 payment.status = Payment.Status.COMPLETED
                 payment.save()
+
+                # Check if overpaid (refund the excess difference automatically)
+                if amount_total_cents is not None and amount_total_cents > expected_cents:
+                    excess_cents = amount_total_cents - expected_cents
+                    payment_intent_id = session.get('payment_intent')
+                    if excess_cents > 0 and payment_intent_id:
+                        try:
+                            stripe.Refund.create(
+                                payment_intent=payment_intent_id,
+                                amount=excess_cents,
+                                reason="duplicate",
+                                metadata={"note": f"Automatic refund of excess payment for Order {order.id}"},
+                            )
+                            student_user = getattr(order.student, "user", None)
+                            if student_user:
+                                Notification.objects.create(
+                                    user=student_user,
+                                    title="Overpayment Refund Processed",
+                                    body=f"You paid ${amount_total_cents/100:.2f} which exceeds your total (${order.total_amount:.2f}). An automatic refund of ${excess_cents/100:.2f} has been issued to your payment method.",
+                                )
+                        except Exception as refund_err:
+                            print(f"ERROR: Failed to issue excess refund for Order {order_id}: {str(refund_err)}", flush=True)
 
                 # Update Order
                 order.status = BookingOrder.Status.PAID
@@ -322,7 +364,6 @@ class StripeWebhookView(View):
                 # Update all linked Bookings
                 order.bookings.all().update(status=SessionBooking.Status.CONFIRMED)
                 
-                # TODO: Trigger Notifications / Generate Meeting Link here
                 teacher_user = getattr(order.teacher, "user", None)
                 student_user = getattr(order.student, "user", None)
                 if teacher_user and student_user:
@@ -337,6 +378,74 @@ class StripeWebhookView(View):
             print(f"ERROR: Webhook received for non-existent Order {order_id}")
         except Exception as e:
             print(f"ERROR: Webhook processing failed for Order {order_id}: {str(e)}")
+
+
+class CancelOrRefundOrderView(APIView):
+    """
+    Allows a student or teacher to cancel an order.
+    If the order is already paid, securely initiates a Stripe refund.
+    Releases all reserved slots and cancels the bookings.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        order_id = request.data.get("order_id")
+        if not order_id:
+            return Response({"error": "order_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            order = BookingOrder.objects.get(id=order_id)
+        except BookingOrder.DoesNotExist:
+            return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        is_student = (order.student.user == request.user)
+        is_teacher = (order.teacher.user == request.user)
+        if not (is_student or is_teacher or request.user.is_staff):
+            return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
+
+        if order.status == BookingOrder.Status.CANCELLED:
+            return Response({"message": "Order is already cancelled."}, status=status.HTTP_200_OK)
+
+        from risala_backend.users.models import TimeSlot, SessionBooking
+        with transaction.atomic():
+            refund_issued = False
+            # If paid, process refund via Stripe
+            if order.status == BookingOrder.Status.PAID:
+                try:
+                    payment = getattr(order, "payment", None)
+                    if payment and payment.stripe_payment_intent_id:
+                        stripe.Refund.create(
+                            payment_intent=payment.stripe_payment_intent_id,
+                            reason="requested_by_customer" if is_student else "fraudulent",
+                            metadata={"order_id": str(order.id), "cancelled_by": request.user.username},
+                        )
+                        payment.status = Payment.Status.REFUNDED
+                        payment.save(update_fields=["status", "updated_at"])
+                        refund_issued = True
+                except Exception as refund_err:
+                    print(f"ERROR: Stripe refund failed for Order {order.id}: {refund_err}", flush=True)
+                    return Response({"error": f"Refund processing failed: {str(refund_err)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            order.status = BookingOrder.Status.CANCELLED
+            order.save(update_fields=["status", "updated_at"])
+
+            # Release teacher time slots
+            TimeSlot.objects.filter(booking__in=order.bookings.all()).update(is_booked=False, booking=None)
+            order.bookings.all().update(status=SessionBooking.Status.CANCELLED)
+
+            # Notifications
+            other_user = order.teacher.user if is_student else order.student.user
+            Notification.objects.create(
+                user=other_user,
+                title="Order Cancelled",
+                body=f"Order for package booking was cancelled. {'A full refund was issued.' if refund_issued else ''}",
+            )
+
+        return Response({
+            "message": "Order cancelled successfully.",
+            "refund_issued": refund_issued,
+            "status": "CANCELLED",
+        }, status=status.HTTP_200_OK)
 
 
 class VerifyPaymentView(APIView):

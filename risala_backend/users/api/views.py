@@ -4,7 +4,7 @@ API Views for User and Profile models.
 
 import uuid
 from datetime import date, datetime, timedelta, timezone as py_timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
 
 from django.db import transaction
@@ -403,19 +403,20 @@ class SessionBookingViewSet(
 
             total_amount = max(total_hours * hourly_rate, Decimal("1.00"))
             
-            # Create Order
+            # Create Order - auto-approved so the student can pay immediately without unnecessary delay
             order = BookingOrder.objects.create(
                 student=student,
                 teacher=teacher,
                 total_amount=total_amount,
                 currency="usd",
-                status=BookingOrder.Status.REQUESTED,
+                status=BookingOrder.Status.APPROVED,
             )
             
             # Save bookings and update slots
             for item in potential_bookings:
                 booking = item["booking"]
                 booking.order = order
+                booking.status = SessionBooking.Status.APPROVED
                 booking.save()
                 
                 slot = item["slot"]
@@ -423,13 +424,21 @@ class SessionBookingViewSet(
                 slot.booking = booking
                 slot.save(update_fields=["is_booked", "booking", "updated_at"])
                 
-        # Send notification to teacher
+        # Send notifications
         teacher_user = getattr(teacher, "user", None)
         if teacher_user:
             Notification.objects.create(
                 user=teacher_user,
-                title="New Package Booking",
-                body=f"A student requested a package of {len(potential_bookings)} sessions.",
+                title="New Package Booking (Auto-Approved)",
+                body=f"A student booked a package of {len(potential_bookings)} sessions. Waiting for student payment.",
+            )
+        
+        student_user = getattr(student, "user", None)
+        if student_user:
+            Notification.objects.create(
+                user=student_user,
+                title="Package Booked & Approved",
+                body=f"Your package of {len(potential_bookings)} sessions with {teacher.user.full_name or teacher.user.username} is approved! Please complete payment before your first session begins.",
             )
         
         order_serializer = BookingOrderSerializer(order)
@@ -486,23 +495,65 @@ class SessionBookingViewSet(
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        with transaction.atomic():
-            order.status = BookingOrder.Status.APPROVED
-            order.save()
-            # Update all bookings to APPROVED (or RESERVED/PENDING waiting for payment)
-            # Keeping them as REQUESTED or changing to APPROVED?
-            # The flow is: Requested -> Approved -> Paid (Confirmed)
-            # Let's set bookings to APPROVED so they are distinct from initial requests.
-            order.bookings.update(status=SessionBooking.Status.APPROVED)
+        now = timezone.now()
+        bookings_qs = order.bookings.all()
+        total_sessions = bookings_qs.count()
 
-            # Notify student
-            student_user = getattr(order.student, "user", None)
-            if student_user:
-                Notification.objects.create(
-                    user=student_user,
-                    title="Package Approved",
-                    body=f"Your package with {teacher_profile.user.full_name or teacher_profile.user.username} has been approved. Please proceed to payment.",
+        past_bookings = bookings_qs.filter(start_at__lt=now)
+        future_bookings = bookings_qs.filter(start_at__gte=now)
+
+        if not future_bookings.exists():
+            return Response(
+                {
+                    "error": "Cannot approve this package because all scheduled sessions have already elapsed. Please ask the student to book upcoming dates."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            elapsed_count = past_bookings.count()
+            future_count = future_bookings.count()
+
+            if elapsed_count > 0:
+                # 1. Release slots for elapsed/missed sessions
+                TimeSlot.objects.filter(booking__in=past_bookings).update(
+                    is_booked=False, booking=None
                 )
+                past_bookings.update(status=SessionBooking.Status.CANCELLED)
+
+                # 2. Prorate total amount for remaining future sessions
+                prorated = (order.total_amount * Decimal(future_count)) / Decimal(total_sessions)
+
+                # 3. Round to the nearest 10th digit number (multiple of 10: e.g., 10, 20, 30...)
+                rounded_10 = (prorated / Decimal("10")).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * Decimal("10")
+                final_amount = max(rounded_10, Decimal("10.00"))
+
+                order.total_amount = final_amount
+                order.status = BookingOrder.Status.APPROVED
+                order.save(update_fields=["total_amount", "status", "updated_at"])
+
+                future_bookings.update(status=SessionBooking.Status.APPROVED)
+
+                # Notify student with proration info
+                student_user = getattr(order.student, "user", None)
+                if student_user:
+                    Notification.objects.create(
+                        user=student_user,
+                        title="Package Approved (Adjusted)",
+                        body=f"Your package with {teacher_profile.user.full_name or teacher_profile.user.username} has been approved. {elapsed_count} elapsed session(s) were removed. Your updated prorated total is ${final_amount:.2f} for {future_count} session(s).",
+                    )
+            else:
+                order.status = BookingOrder.Status.APPROVED
+                order.save(update_fields=["status", "updated_at"])
+                order.bookings.update(status=SessionBooking.Status.APPROVED)
+
+                student_user = getattr(order.student, "user", None)
+                if student_user:
+                    Notification.objects.create(
+                        user=student_user,
+                        title="Package Approved",
+                        body=f"Your package with {teacher_profile.user.full_name or teacher_profile.user.username} has been approved. Please proceed to payment.",
+                    )
 
         return Response(BookingOrderSerializer(order).data, status=status.HTTP_200_OK)
 
@@ -536,6 +587,14 @@ class SessionBookingViewSet(
         }:
             return Response(
                 {"detail": "Only requested bookings can be approved."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if booking.start_at < timezone.now():
+            return Response(
+                {
+                    "error": "Cannot approve this booking because the scheduled session start time has already passed."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
