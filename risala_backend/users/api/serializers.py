@@ -709,6 +709,5 @@ class TeacherAuditionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "user", "verified_by", "verified_at", "created_at"]
 
-    def get_jitsi_audition_url(self, obj):
-        return f"https://meet.jit.si/risala-audition-{obj.id}"
-
+    def get_jitsi_audition_url(self, obj) -> str:
+        return f"https://fairmeeting.net/risala-audition-{obj.id}"

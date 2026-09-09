@@ -469,9 +469,8 @@ class SessionBooking(TimeStampedModel, UUIDModel):
         return f"{self.teacher} -> {self.student} @ {self.start_at}"
 
     @property
-    def jitsi_room_url(self):
-        # Generates a unique, predictable room URL for this session
-        return f"https://meet.jit.si/risala-session-{self.id}"
+    def jitsi_room_url(self) -> str:
+        return f"https://fairmeeting.net/risala-session-{self.id}"
 
     def overlaps(self, other_start, other_end) -> bool:
         return not (self.end_at <= other_start or self.start_at >= other_end)
