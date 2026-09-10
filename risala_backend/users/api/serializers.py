@@ -421,6 +421,9 @@ class SessionBookingSerializer(serializers.ModelSerializer):
             if time_slot.allowed_booking_type == TimeSlot.BookingType.RANGE:
                 raise serializers.ValidationError("This time slot only allows range bookings.")
 
+            if time_slot.start_time <= timezone.now():
+                raise serializers.ValidationError("Cannot book a time slot that has already passed.")
+
             attrs["teacher"] = time_slot.teacher
             attrs["start_at"] = time_slot.start_time
             attrs["end_at"] = time_slot.end_time

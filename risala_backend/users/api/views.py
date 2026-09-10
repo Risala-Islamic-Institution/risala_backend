@@ -396,6 +396,11 @@ class SessionBookingViewSet(
                         {"error": f"Time slot on {slot.start_time} is no longer available."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
+                if slot.start_time <= timezone.now():
+                    return Response(
+                        {"error": f"Time slot on {slot.start_time} has already passed."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
                 if slot.allowed_booking_type == TimeSlot.BookingType.SINGLE:
                     return Response(
                         {"error": f"Time slot on {slot.start_time} only allows single bookings."},
@@ -1030,7 +1035,6 @@ class TimeSlotViewSet(ListModelMixin, DestroyModelMixin, GenericViewSet):
 
                     # Don't create past slots
                     if slot_start <= datetime.now(tz=teacher_tz):
-                        cur_date += timedelta(days=1)
                         continue
 
                     if overwrite:
