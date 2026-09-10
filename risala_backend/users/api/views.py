@@ -689,16 +689,10 @@ class SessionBookingViewSet(
     def start(self, request, pk=None):
         booking = self.get_object()
         teacher_profile = getattr(request.user, "teacher_profile", None)
-        student_profile = getattr(request.user, "student_profile", None)
+        is_admin = getattr(request.user, "is_staff", False) or getattr(request.user, "is_superuser", False) or (hasattr(request.user, "has_role") and request.user.has_role("ADMIN"))
 
-        if not teacher_profile and not student_profile:
-            return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
-            
-        if teacher_profile and booking.teacher != teacher_profile:
-            return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
-            
-        if student_profile and booking.student != student_profile:
-            return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+        if not (teacher_profile and booking.teacher == teacher_profile) and not is_admin:
+            return Response({"detail": "Only the assigned teacher or admin can start a session."}, status=status.HTTP_403_FORBIDDEN)
 
         if booking.status not in {SessionBooking.Status.CONFIRMED, SessionBooking.Status.IN_PROGRESS}:
             return Response(
