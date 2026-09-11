@@ -244,6 +244,10 @@ class TeacherProfileSerializer(serializers.ModelSerializer):
             "total_students",
             "verification_status",
             "profile_visibility",
+            "payout_bank_name",
+            "payout_account_number",
+            "payout_account_holder",
+            "payout_phone",
             "created_at",
         ]
         read_only_fields = [
@@ -256,6 +260,38 @@ class TeacherProfileSerializer(serializers.ModelSerializer):
 
     def get_total_students(self, obj):
         return obj.compute_total_students()
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        request = self.context.get("request")
+        # Hide sensitive payout banking fields unless requester is the teacher themselves or staff
+        if request and request.user.is_authenticated:
+            is_owner = instance.user_id == request.user.id
+            is_staff = request.user.is_staff or request.user.is_superuser
+            if not (is_owner or is_staff):
+                ret.pop("payout_bank_name", None)
+                ret.pop("payout_account_number", None)
+                ret.pop("payout_account_holder", None)
+                ret.pop("payout_phone", None)
+        else:
+            ret.pop("payout_bank_name", None)
+            ret.pop("payout_account_number", None)
+            ret.pop("payout_account_holder", None)
+            ret.pop("payout_phone", None)
+        return ret
+
+
+class TeacherPayoutAccountSerializer(serializers.ModelSerializer):
+    """Serializer for teacher payout bank account updates."""
+
+    class Meta:
+        model = TeacherProfile
+        fields = [
+            "payout_bank_name",
+            "payout_account_number",
+            "payout_account_holder",
+            "payout_phone",
+        ]
 
 
 class StudentProfileSerializer(serializers.ModelSerializer):
@@ -638,8 +674,14 @@ class SessionAttendanceSerializer(serializers.ModelSerializer):
 class TeacherPayoutLedgerSerializer(serializers.ModelSerializer):
     teacher_name = serializers.CharField(source="teacher.user.full_name", read_only=True)
     teacher_email = serializers.CharField(source="teacher.user.email", read_only=True)
+    student_name = serializers.CharField(source="booking.student.user.full_name", read_only=True)
     booking_id = serializers.UUIDField(source="booking.id", read_only=True)
     booking_start_at = serializers.DateTimeField(source="booking.start_at", read_only=True)
+    disbursed_by_name = serializers.CharField(source="disbursed_by.full_name", read_only=True)
+    teacher_payout_bank_name = serializers.CharField(source="teacher.payout_bank_name", read_only=True)
+    teacher_payout_account_number = serializers.CharField(source="teacher.payout_account_number", read_only=True)
+    teacher_payout_account_holder = serializers.CharField(source="teacher.payout_account_holder", read_only=True)
+    teacher_payout_phone = serializers.CharField(source="teacher.payout_phone", read_only=True)
 
     class Meta:
         model = TeacherPayoutLedger
@@ -647,6 +689,7 @@ class TeacherPayoutLedgerSerializer(serializers.ModelSerializer):
             "id",
             "booking",
             "booking_id",
+            "student_name",
             "teacher",
             "teacher_name",
             "teacher_email",
@@ -657,6 +700,14 @@ class TeacherPayoutLedgerSerializer(serializers.ModelSerializer):
             "teacher_net_amount",
             "status",
             "disbursed_at",
+            "disbursed_by",
+            "disbursed_by_name",
+            "payout_reference",
+            "payout_method",
+            "teacher_payout_bank_name",
+            "teacher_payout_account_number",
+            "teacher_payout_account_holder",
+            "teacher_payout_phone",
             "notes",
             "created_at",
         ]

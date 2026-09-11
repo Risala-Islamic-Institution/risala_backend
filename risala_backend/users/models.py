@@ -237,6 +237,12 @@ class TeacherProfile(TimeStampedModel, UUIDModel):
     recitation_score = models.PositiveIntegerField(null=True, blank=True)
     profile_visibility = models.BooleanField(default=True)
 
+    # Payout / Disbursement Account (for Escrow settlement)
+    payout_bank_name = models.CharField(max_length=100, blank=True, help_text="e.g. Commercial Bank of Ethiopia (CBE), Telebirr, Awash Bank")
+    payout_account_number = models.CharField(max_length=100, blank=True, help_text="Bank account number or mobile money number")
+    payout_account_holder = models.CharField(max_length=150, blank=True, help_text="Account holder legal full name")
+    payout_phone = models.CharField(max_length=50, blank=True, help_text="Contact telephone for payout confirmation")
+
     class Meta:
         verbose_name = "Teacher Profile"
         verbose_name_plural = "Teacher Profiles"

@@ -164,6 +164,15 @@ class TeacherPayoutLedger(TimeStampedModel, UUIDModel):
         default=Status.HELD,
     )
     disbursed_at = models.DateTimeField(null=True, blank=True)
+    disbursed_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="disbursed_payout_ledgers",
+    )
+    payout_reference = models.CharField(max_length=100, blank=True, help_text="Bank transaction reference, receipt number, or FT transfer code")
+    payout_method = models.CharField(max_length=50, blank=True, default="BANK_TRANSFER", help_text="e.g. BANK_TRANSFER, TELEBIRR, CBE_BIRR, MANUAL")
     notes = models.TextField(blank=True)
 
     class Meta:

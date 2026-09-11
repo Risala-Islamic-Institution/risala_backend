@@ -49,6 +49,7 @@ from .serializers import (
     AttendanceHeartbeatSerializer,
     SessionAttendanceSerializer,
     TeacherPayoutLedgerSerializer,
+    TeacherPayoutAccountSerializer,
     SessionExcuseSerializer,
     TeacherAuditionSerializer,
 )
@@ -98,6 +99,148 @@ class UserViewSet(RetrieveModelMixin, ListModelMixin, UpdateModelMixin, GenericV
             status=status.HTTP_404_NOT_FOUND,
         )
 
+    @action(detail=False, methods=["get"], url_path="student-analytics")
+    def student_analytics(self, request):
+        """
+        Calculated attendance metrics and spending insights for the requesting student.
+        Aggregates single and package bookings across multiple teachers.
+        """
+        user = request.user
+        if not hasattr(user, "student_profile"):
+            return Response({"detail": "Student profile required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        student = user.student_profile
+        now = timezone.now()
+        bookings = SessionBooking.objects.filter(student=student).select_related(
+            "teacher", "teacher__user", "order", "attendance"
+        )
+
+        completed_verdicts = [
+            SessionAttendance.Verdict.VERIFIED_COMPLETE,
+            SessionAttendance.Verdict.STUDENT_ABSENT,
+        ]
+
+        attended_bookings = [
+            b for b in bookings
+            if b.status == SessionBooking.Status.COMPLETED
+            or (hasattr(b, "attendance") and b.attendance and b.attendance.verdict in completed_verdicts)
+        ]
+
+        remaining_bookings = [
+            b for b in bookings
+            if b.status in [SessionBooking.Status.CONFIRMED, SessionBooking.Status.RESERVED]
+            and (b.start_at is None or b.start_at >= now)
+        ]
+
+        # Calculate distinct attended days and remaining days
+        attended_dates = {b.start_at.date().isoformat() for b in attended_bookings if b.start_at}
+        remaining_dates = {b.start_at.date().isoformat() for b in remaining_bookings if b.start_at}
+
+        # Calculate student spending:
+        paid_orders = BookingOrder.objects.filter(
+            student=student, status=BookingOrder.Status.PAID
+        )
+        total_order_spent = sum((o.total_amount for o in paid_orders), Decimal("0.00"))
+
+        standalone_bookings = [
+            b for b in bookings
+            if not b.order_id and b.status in [
+                SessionBooking.Status.CONFIRMED,
+                SessionBooking.Status.COMPLETED,
+                SessionBooking.Status.IN_PROGRESS,
+            ]
+        ]
+        standalone_spent = Decimal("0.00")
+        for b in standalone_bookings:
+            duration_hours = Decimal("1.00")
+            if b.start_at and b.end_at:
+                duration_hours = max(Decimal(str((b.end_at - b.start_at).total_seconds() / 3600.0)), Decimal("0.50"))
+            rate = b.hourly_rate or (b.teacher.hourly_rate if b.teacher else Decimal("10.00")) or Decimal("10.00")
+            standalone_spent += rate * duration_hours
+
+        total_spent = total_order_spent + standalone_spent
+
+        # Group by Teacher breakdown
+        teacher_meta: dict[str, dict[str, str]] = {}
+        teacher_attended: dict[str, int] = {}
+        teacher_remaining: dict[str, int] = {}
+        teacher_spent: dict[str, Decimal] = {}
+
+        for b in bookings:
+            if not b.teacher:
+                continue
+            tid = str(b.teacher.id)
+            if tid not in teacher_meta:
+                t_user = b.teacher.user
+                avatar_url = ""
+                if t_user.avatar:
+                    try:
+                        avatar_url = t_user.avatar.url
+                    except Exception:
+                        avatar_url = ""
+                teacher_meta[tid] = {
+                    "teacher_id": tid,
+                    "teacher_name": t_user.full_name or t_user.username,
+                    "avatar_url": avatar_url,
+                }
+                teacher_attended[tid] = 0
+                teacher_remaining[tid] = 0
+                teacher_spent[tid] = Decimal("0.00")
+
+            if b in attended_bookings:
+                teacher_attended[tid] += 1
+            elif b in remaining_bookings:
+                teacher_remaining[tid] += 1
+
+        for order in paid_orders:
+            if order.teacher_id:
+                tid = str(order.teacher_id)
+                if tid in teacher_spent:
+                    teacher_spent[tid] += order.total_amount
+
+        teachers_breakdown = [
+            {
+                "teacher_id": tid,
+                "teacher_name": meta["teacher_name"],
+                "avatar_url": meta["avatar_url"],
+                "sessions_attended": teacher_attended.get(tid, 0),
+                "sessions_remaining": teacher_remaining.get(tid, 0),
+                "total_spent": str(teacher_spent.get(tid, Decimal("0.00")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+            }
+            for tid, meta in teacher_meta.items()
+        ]
+
+        total_finished = len(attended_bookings)
+        missed = len([b for b in bookings if hasattr(b, "attendance") and b.attendance and b.attendance.verdict == SessionAttendance.Verdict.STUDENT_ABSENT])
+        total_eval = total_finished + missed
+        attendance_rate = round((total_finished / total_eval * 100), 1) if total_eval > 0 else 100.0
+
+        # Trajectory (last 6 months spent and attended)
+        trajectory = []
+        for i in range(5, -1, -1):
+            m_date = now - timedelta(days=i * 30)
+            m_label = m_date.strftime("%b")
+            m_year = m_date.year
+            m_month = m_date.month
+            m_attended = sum(1 for b in attended_bookings if b.start_at and b.start_at.year == m_year and b.start_at.month == m_month)
+            m_spent = sum((o.total_amount for o in paid_orders if o.created_at.year == m_year and o.created_at.month == m_month), Decimal("0.00"))
+            trajectory.append({
+                "period": m_label,
+                "sessions_attended": m_attended,
+                "amount_spent": float(m_spent),
+            })
+
+        return Response({
+            "total_sessions_attended": len(attended_bookings),
+            "total_sessions_remaining": len(remaining_bookings),
+            "days_attended": len(attended_dates),
+            "days_remaining": len(remaining_dates),
+            "total_spent": str(total_spent.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+            "attendance_rate": attendance_rate,
+            "teachers_breakdown": teachers_breakdown,
+            "trajectory": trajectory,
+        }, status=status.HTTP_200_OK)
+
 
 class TeacherProfileViewSet(
     RetrieveModelMixin, ListModelMixin, UpdateModelMixin, GenericViewSet
@@ -109,8 +252,6 @@ class TeacherProfileViewSet(
     lookup_field = "id"
 
     def get_permissions(self):
-        # Anyone (incl. signed-out visitors) may browse teacher profiles;
-        # updating a profile still requires authentication.
         if self.action in ("list", "retrieve"):
             return [AllowAny()]
         return [IsAuthenticated()]
@@ -130,6 +271,179 @@ class TeacherProfileViewSet(
             queryset = queryset.filter(verification_status="VERIFIED")
 
         return queryset
+
+    @action(detail=False, methods=["get"], url_path="my-analytics")
+    def my_analytics(self, request):
+        """
+        Comprehensive calculated attendance, financial escrow breakdown & trajectory for Ustaz.
+        """
+        user = request.user
+        if not hasattr(user, "teacher_profile"):
+            return Response({"detail": "Teacher profile required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        teacher = user.teacher_profile
+        now = timezone.now()
+        bookings = SessionBooking.objects.filter(teacher=teacher).select_related(
+            "student", "student__user", "order", "attendance"
+        )
+
+        completed_verdicts = [
+            SessionAttendance.Verdict.VERIFIED_COMPLETE,
+            SessionAttendance.Verdict.STUDENT_ABSENT,
+        ]
+
+        completed_bookings = [
+            b for b in bookings
+            if b.status == SessionBooking.Status.COMPLETED
+            or (hasattr(b, "attendance") and b.attendance and b.attendance.verdict in completed_verdicts)
+        ]
+
+        remaining_bookings = [
+            b for b in bookings
+            if b.status in [SessionBooking.Status.CONFIRMED, SessionBooking.Status.RESERVED]
+            and (b.start_at is None or b.start_at >= now)
+        ]
+
+        # Distinct student count & student breakdown
+        student_meta: dict[str, dict[str, str]] = {}
+        student_attended: dict[str, int] = {}
+        student_remaining: dict[str, int] = {}
+        student_earned: dict[str, Decimal] = {}
+
+        for b in bookings:
+            if not b.student:
+                continue
+            sid = str(b.student.id)
+            if sid not in student_meta:
+                s_user = b.student.user
+                avatar_url = ""
+                if s_user.avatar:
+                    try:
+                        avatar_url = s_user.avatar.url
+                    except Exception:
+                        avatar_url = ""
+                student_meta[sid] = {
+                    "student_id": sid,
+                    "student_name": s_user.full_name or s_user.username,
+                    "student_email": s_user.email,
+                    "avatar_url": avatar_url,
+                }
+                student_attended[sid] = 0
+                student_remaining[sid] = 0
+                student_earned[sid] = Decimal("0.00")
+
+            if b in completed_bookings:
+                student_attended[sid] += 1
+            elif b in remaining_bookings:
+                student_remaining[sid] += 1
+
+        # Financial breakdown from TeacherPayoutLedger
+        ledgers = TeacherPayoutLedger.objects.filter(teacher=teacher).select_related("booking")
+        gross_earnings = sum((l.gross_amount for l in ledgers), Decimal("0.00"))
+        platform_fee_total = sum((l.platform_fee_amount for l in ledgers), Decimal("0.00"))
+        net_earnings = sum((l.teacher_net_amount for l in ledgers), Decimal("0.00"))
+
+        escrow_held = sum((l.teacher_net_amount for l in ledgers if l.status == TeacherPayoutLedger.Status.HELD), Decimal("0.00"))
+        escrow_payable = sum((l.teacher_net_amount for l in ledgers if l.status == TeacherPayoutLedger.Status.PAYABLE), Decimal("0.00"))
+        escrow_settled = sum((l.teacher_net_amount for l in ledgers if l.status == TeacherPayoutLedger.Status.SETTLED), Decimal("0.00"))
+
+        # Add earnings per student
+        for l in ledgers:
+            if l.booking and l.booking.student_id:
+                sid = str(l.booking.student_id)
+                if sid in student_earned:
+                    student_earned[sid] += l.teacher_net_amount
+
+        students_breakdown = [
+            {
+                "student_id": sid,
+                "student_name": meta["student_name"],
+                "student_email": meta["student_email"],
+                "avatar_url": meta["avatar_url"],
+                "sessions_attended": student_attended.get(sid, 0),
+                "sessions_remaining": student_remaining.get(sid, 0),
+                "total_earned": str(student_earned.get(sid, Decimal("0.00")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+            }
+            for sid, meta in student_meta.items()
+        ]
+
+        # Trajectory (last 6 months net earnings and completed classes)
+        trajectory = []
+        for i in range(5, -1, -1):
+            m_date = now - timedelta(days=i * 30)
+            m_label = m_date.strftime("%b")
+            m_year = m_date.year
+            m_month = m_date.month
+            m_sessions = sum(1 for b in completed_bookings if b.start_at and b.start_at.year == m_year and b.start_at.month == m_month)
+            m_net = sum((l.teacher_net_amount for l in ledgers if l.created_at.year == m_year and l.created_at.month == m_month), Decimal("0.00"))
+            trajectory.append({
+                "period": m_label,
+                "sessions_completed": m_sessions,
+                "amount": float(m_net),
+            })
+
+        # Payout account
+        payout_account = {
+            "payout_bank_name": teacher.payout_bank_name,
+            "payout_account_number": teacher.payout_account_number,
+            "payout_account_holder": teacher.payout_account_holder,
+            "payout_phone": teacher.payout_phone,
+            "is_configured": bool(teacher.payout_account_number and teacher.payout_bank_name),
+        }
+
+        return Response({
+            "total_sessions_taught": len(completed_bookings),
+            "total_sessions_remaining": len(remaining_bookings),
+            "total_students_count": len(student_meta),
+            "gross_earnings": str(gross_earnings.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+            "platform_fee_total": str(platform_fee_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+            "net_earnings": str(net_earnings.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+            "escrow_held": str(escrow_held.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+            "escrow_payable": str(escrow_payable.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+            "escrow_settled": str(escrow_settled.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+            "students_breakdown": students_breakdown,
+            "trajectory": trajectory,
+            "payout_account": payout_account,
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get", "patch", "put"], url_path="payout-account")
+    def payout_account(self, request):
+        user = request.user
+        if not hasattr(user, "teacher_profile"):
+            return Response({"detail": "Teacher profile required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        teacher = user.teacher_profile
+        if request.method == "GET":
+            return Response({
+                "payout_bank_name": teacher.payout_bank_name,
+                "payout_account_number": teacher.payout_account_number,
+                "payout_account_holder": teacher.payout_account_holder,
+                "payout_phone": teacher.payout_phone,
+                "is_configured": bool(teacher.payout_account_number and teacher.payout_bank_name),
+            })
+
+        serializer = TeacherPayoutAccountSerializer(teacher, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response({
+            **serializer.data,
+            "is_configured": bool(teacher.payout_account_number and teacher.payout_bank_name),
+            "detail": "Payout account details saved successfully.",
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="my-payouts")
+    def my_payouts(self, request):
+        user = request.user
+        if not hasattr(user, "teacher_profile"):
+            return Response({"detail": "Teacher profile required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        teacher = user.teacher_profile
+        qs = TeacherPayoutLedger.objects.filter(teacher=teacher).select_related(
+            "booking", "teacher", "teacher__user", "disbursed_by"
+        ).order_by("-created_at")
+
+        serializer = TeacherPayoutLedgerSerializer(qs, many=True, context={"request": request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class TeacherAvailabilityViewSet(
@@ -1503,8 +1817,22 @@ class AdminEscrowLedgerViewSet(viewsets.ReadOnlyModelViewSet):
         ledger = self.get_object()
         ledger.status = TeacherPayoutLedger.Status.SETTLED
         ledger.disbursed_at = timezone.now()
+        ledger.disbursed_by = request.user
+        ledger.payout_reference = request.data.get("payout_reference", ledger.payout_reference or "")
+        ledger.payout_method = request.data.get("payout_method", ledger.payout_method or "BANK_TRANSFER")
         ledger.notes = request.data.get("notes", ledger.notes)
         ledger.save()
+
+        try:
+            Notification.objects.create(
+                recipient=ledger.teacher.user,
+                title="Ustaz Payout Disbursed",
+                message=f"Your net payout of {ledger.teacher_net_amount} for Session #{str(ledger.booking_id)[:8]} has been disbursed to your account (Ref: {ledger.payout_reference or 'Direct Transfer'}).",
+                notification_type=Notification.NotificationType.PAYMENT,
+            )
+        except Exception:
+            pass
+
         return Response(self.get_serializer(ledger).data, status=status.HTTP_200_OK)
 
 
