@@ -15,6 +15,7 @@ from .models import (
     StudentProfile,
     TeacherAvailability,
     SessionBooking,
+    SupportedBank,
 )
 
 
@@ -90,3 +91,12 @@ class TeacherAvailabilityAdmin(admin.ModelAdmin):
 class SessionBookingAdmin(admin.ModelAdmin):
     list_display = ("teacher", "student", "start_at", "end_at", "status")
     list_filter = ("teacher", "student", "status")
+
+
+@admin.register(SupportedBank)
+class SupportedBankAdmin(admin.ModelAdmin):
+    list_display = ("name", "code", "provider_type", "account_number_label", "is_active", "display_order")
+    list_filter = ("provider_type", "is_active")
+    search_fields = ("name", "code")
+    list_editable = ("is_active", "display_order")
+

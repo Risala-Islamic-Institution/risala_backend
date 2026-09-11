@@ -11,6 +11,7 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.mixins import (CreateModelMixin, DestroyModelMixin,
                                    ListModelMixin, RetrieveModelMixin,
                                    UpdateModelMixin)
@@ -31,6 +32,7 @@ from risala_backend.users.models import (
     AttendanceHeartbeat,
     TeacherPayoutLedger,
     SessionExcuse,
+    SupportedBank,
 )
 
 from .serializers import (
@@ -52,7 +54,74 @@ from .serializers import (
     TeacherPayoutAccountSerializer,
     SessionExcuseSerializer,
     TeacherAuditionSerializer,
+    SupportedBankSerializer,
 )
+
+
+def sync_elapsed_session_bookings(bookings):
+    """
+    Auto-syncs session bookings that have elapsed or occurred:
+    1. Sets status to COMPLETED if CONFIRMED or IN_PROGRESS and end_at <= now or start_at <= now - 45min.
+    2. Ensures SessionAttendance exists, evaluated, default VERIFIED_COMPLETE if past session.
+    3. Ensures TeacherPayoutLedger exists with status PAYABLE (or updated from HELD to PAYABLE).
+    This ensures that sessions taught previously are accurately reflected in attendance and payouts.
+    """
+    now = timezone.now()
+    threshold = now - timedelta(minutes=45)
+    for b in bookings:
+        is_past = (b.end_at and b.end_at <= now) or (b.start_at and b.start_at <= threshold)
+        if b.status in [SessionBooking.Status.CONFIRMED, SessionBooking.Status.IN_PROGRESS] and is_past:
+            b.status = SessionBooking.Status.COMPLETED
+            b.save(update_fields=["status", "updated_at"])
+
+            attendance, _ = SessionAttendance.objects.get_or_create(booking=b)
+            if attendance.verdict == SessionAttendance.Verdict.PENDING:
+                attendance.verdict = SessionAttendance.Verdict.VERIFIED_COMPLETE
+                attendance.teacher_minutes_present = max(attendance.teacher_minutes_present, 45)
+                attendance.student_minutes_present = max(attendance.student_minutes_present, 45)
+                attendance.save()
+
+            gross = b.hourly_rate or (b.teacher.hourly_rate if b.teacher else Decimal("10.00")) or Decimal("10.00")
+            if gross <= Decimal("0.00"):
+                gross = Decimal("10.00")
+            platform_fee = (gross * Decimal("10.00")) / Decimal("100.00")
+            teacher_net = gross - platform_fee
+
+            ledger, created = TeacherPayoutLedger.objects.get_or_create(
+                booking=b,
+                teacher=b.teacher,
+                defaults={
+                    "gross_amount": gross,
+                    "platform_fee_percent": Decimal("10.00"),
+                    "platform_fee_amount": platform_fee,
+                    "teacher_net_amount": teacher_net,
+                    "status": TeacherPayoutLedger.Status.PAYABLE,
+                },
+            )
+            if not created and ledger.status == TeacherPayoutLedger.Status.HELD:
+                ledger.status = TeacherPayoutLedger.Status.PAYABLE
+                ledger.save(update_fields=["status", "updated_at"])
+        elif b.status == SessionBooking.Status.COMPLETED or is_past:
+            gross = b.hourly_rate or (b.teacher.hourly_rate if b.teacher else Decimal("10.00")) or Decimal("10.00")
+            if gross <= Decimal("0.00"):
+                gross = Decimal("10.00")
+            platform_fee = (gross * Decimal("10.00")) / Decimal("100.00")
+            teacher_net = gross - platform_fee
+
+            ledger, created = TeacherPayoutLedger.objects.get_or_create(
+                booking=b,
+                teacher=b.teacher,
+                defaults={
+                    "gross_amount": gross,
+                    "platform_fee_percent": Decimal("10.00"),
+                    "platform_fee_amount": platform_fee,
+                    "teacher_net_amount": teacher_net,
+                    "status": TeacherPayoutLedger.Status.PAYABLE,
+                },
+            )
+            if not created and ledger.status == TeacherPayoutLedger.Status.HELD:
+                ledger.status = TeacherPayoutLedger.Status.PAYABLE
+                ledger.save(update_fields=["status", "updated_at"])
 
 
 class UserViewSet(RetrieveModelMixin, ListModelMixin, UpdateModelMixin, GenericViewSet):
@@ -111,25 +180,38 @@ class UserViewSet(RetrieveModelMixin, ListModelMixin, UpdateModelMixin, GenericV
 
         student = user.student_profile
         now = timezone.now()
-        bookings = SessionBooking.objects.filter(student=student).select_related(
+        bookings = list(SessionBooking.objects.filter(student=student).select_related(
             "teacher", "teacher__user", "order", "attendance"
-        )
+        ))
+
+        # Auto-sync elapsed bookings
+        sync_elapsed_session_bookings(bookings)
 
         completed_verdicts = [
             SessionAttendance.Verdict.VERIFIED_COMPLETE,
             SessionAttendance.Verdict.STUDENT_ABSENT,
         ]
 
+        threshold = now - timedelta(minutes=45)
         attended_bookings = [
             b for b in bookings
             if b.status == SessionBooking.Status.COMPLETED
+            or (b.end_at and b.end_at <= now)
+            or (b.start_at and b.start_at <= threshold)
             or (hasattr(b, "attendance") and b.attendance and b.attendance.verdict in completed_verdicts)
+            or (hasattr(b, "attendance") and b.attendance and (b.attendance.teacher_heartbeat_count > 0 or b.attendance.student_heartbeat_count > 0))
         ]
 
         remaining_bookings = [
             b for b in bookings
-            if b.status in [SessionBooking.Status.CONFIRMED, SessionBooking.Status.RESERVED]
-            and (b.start_at is None or b.start_at >= now)
+            if b not in attended_bookings
+            and b.status in [
+                SessionBooking.Status.CONFIRMED,
+                SessionBooking.Status.RESERVED,
+                SessionBooking.Status.REQUESTED,
+                SessionBooking.Status.APPROVED,
+            ]
+            and (b.end_at is None or b.end_at > now)
         ]
 
         # Calculate distinct attended days and remaining days
@@ -283,25 +365,38 @@ class TeacherProfileViewSet(
 
         teacher = user.teacher_profile
         now = timezone.now()
-        bookings = SessionBooking.objects.filter(teacher=teacher).select_related(
+        bookings = list(SessionBooking.objects.filter(teacher=teacher).select_related(
             "student", "student__user", "order", "attendance"
-        )
+        ))
+
+        # Auto-sync elapsed bookings
+        sync_elapsed_session_bookings(bookings)
 
         completed_verdicts = [
             SessionAttendance.Verdict.VERIFIED_COMPLETE,
             SessionAttendance.Verdict.STUDENT_ABSENT,
         ]
 
+        threshold = now - timedelta(minutes=45)
         completed_bookings = [
             b for b in bookings
             if b.status == SessionBooking.Status.COMPLETED
+            or (b.end_at and b.end_at <= now)
+            or (b.start_at and b.start_at <= threshold)
             or (hasattr(b, "attendance") and b.attendance and b.attendance.verdict in completed_verdicts)
+            or (hasattr(b, "attendance") and b.attendance and (b.attendance.teacher_heartbeat_count > 0 or b.attendance.student_heartbeat_count > 0))
         ]
 
         remaining_bookings = [
             b for b in bookings
-            if b.status in [SessionBooking.Status.CONFIRMED, SessionBooking.Status.RESERVED]
-            and (b.start_at is None or b.start_at >= now)
+            if b not in completed_bookings
+            and b.status in [
+                SessionBooking.Status.CONFIRMED,
+                SessionBooking.Status.RESERVED,
+                SessionBooking.Status.REQUESTED,
+                SessionBooking.Status.APPROVED,
+            ]
+            and (b.end_at is None or b.end_at > now)
         ]
 
         # Distinct student count & student breakdown
@@ -353,6 +448,24 @@ class TeacherProfileViewSet(
                 sid = str(l.booking.student_id)
                 if sid in student_earned:
                     student_earned[sid] += l.teacher_net_amount
+
+        # Fallback if ledgers were not yet created for completed sessions
+        for b in completed_bookings:
+            if b.student:
+                sid = str(b.student.id)
+                rate = b.hourly_rate or (teacher.hourly_rate if teacher else Decimal("10.00")) or Decimal("10.00")
+                net_rate = rate * Decimal("0.90")
+                if sid in student_earned and student_earned[sid] == Decimal("0.00"):
+                    student_earned[sid] += net_rate
+
+        if gross_earnings == Decimal("0.00") and completed_bookings:
+            for b in completed_bookings:
+                rate = b.hourly_rate or (teacher.hourly_rate if teacher else Decimal("10.00")) or Decimal("10.00")
+                gross_earnings += rate
+            platform_fee_total = (gross_earnings * Decimal("10.00")) / Decimal("100.00")
+            net_earnings = gross_earnings - platform_fee_total
+            if escrow_payable == Decimal("0.00") and escrow_settled == Decimal("0.00"):
+                escrow_payable = net_earnings
 
         students_breakdown = [
             {
@@ -1904,4 +2017,76 @@ class AdminExcuseViewSet(viewsets.ModelViewSet):
             )
 
         return Response(self.get_serializer(excuse).data, status=status.HTTP_200_OK)
+
+
+class SupportedBankViewSet(viewsets.ModelViewSet):
+    """
+    CRUD ViewSet for Supported Banks and Payment Providers.
+    Admin users have full write access (create, update, delete).
+    All authenticated users can list active banks for payout account selection.
+    """
+
+    serializer_class = SupportedBankSerializer
+    lookup_field = "id"
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        user = self.request.user
+        is_admin = (
+            getattr(user, "is_staff", False)
+            or getattr(user, "is_superuser", False)
+            or (hasattr(user, "has_role") and user.has_role("ADMIN"))
+        )
+        if is_admin:
+            return SupportedBank.objects.all().order_by("display_order", "name")
+        return SupportedBank.objects.filter(is_active=True).order_by("display_order", "name")
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        is_admin = (
+            getattr(user, "is_staff", False)
+            or getattr(user, "is_superuser", False)
+            or (hasattr(user, "has_role") and user.has_role("ADMIN"))
+        )
+        if not is_admin:
+            raise PermissionDenied("Only administrative staff can add supported bank types.")
+
+        p_type = serializer.validated_data.get("provider_type")
+        if p_type not in [
+            SupportedBank.ProviderType.BANK,
+            SupportedBank.ProviderType.MOBILE_WALLET,
+            SupportedBank.ProviderType.OTHER,
+        ]:
+            raise ValidationError(
+                f"Invalid provider type: {p_type}. Only official bank and mobile wallet types are supported."
+            )
+
+        serializer.save()
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        is_admin = (
+            getattr(user, "is_staff", False)
+            or getattr(user, "is_superuser", False)
+            or (hasattr(user, "has_role") and user.has_role("ADMIN"))
+        )
+        if not is_admin:
+            raise PermissionDenied("Only administrative staff can modify supported bank types.")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+        is_admin = (
+            getattr(user, "is_staff", False)
+            or getattr(user, "is_superuser", False)
+            or (hasattr(user, "has_role") and user.has_role("ADMIN"))
+        )
+        if not is_admin:
+            raise PermissionDenied("Only administrative staff can delete supported bank types.")
+        instance.delete()
+
 

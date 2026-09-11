@@ -13,6 +13,7 @@ from risala_backend.users.api.views import (
 	AdminAttendanceMonitorViewSet,
 	AdminEscrowLedgerViewSet,
 	AdminExcuseViewSet,
+	SupportedBankViewSet,
 )
 from risala_backend.courses.api.views import CourseViewSet, CourseModuleViewSet, LessonViewSet, EnrollmentViewSet, LessonProgressViewSet, CertificateViewSet, QuizQuestionViewSet, QuizAttemptViewSet, CourseReviewViewSet, CourseAnnouncementViewSet, CourseQuestionViewSet, CourseAnswerViewSet
 
@@ -28,6 +29,7 @@ router.register("admin/teacher-auditions", AdminTeacherAuditionViewSet, basename
 router.register("admin/attendance-monitor", AdminAttendanceMonitorViewSet, basename="admin-attendance-monitor")
 router.register("admin/escrow-ledger", AdminEscrowLedgerViewSet, basename="admin-escrow-ledger")
 router.register("admin/excuses", AdminExcuseViewSet, basename="admin-excuses")
+router.register("supported-banks", SupportedBankViewSet, basename="supported-banks")
 router.register("courses", CourseViewSet, basename="courses")
 router.register("modules", CourseModuleViewSet, basename="modules")
 router.register("lessons", LessonViewSet, basename="lessons")

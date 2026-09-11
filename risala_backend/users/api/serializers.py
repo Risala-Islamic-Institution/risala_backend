@@ -26,6 +26,7 @@ from risala_backend.users.models import (
     AttendanceHeartbeat,
     TeacherPayoutLedger,
     SessionExcuse,
+    SupportedBank,
 )
 
 
@@ -281,6 +282,27 @@ class TeacherProfileSerializer(serializers.ModelSerializer):
         return ret
 
 
+class SupportedBankSerializer(serializers.ModelSerializer):
+    """Serializer for Admin-managed Supported Banks and Payment Providers."""
+
+    provider_type_display = serializers.CharField(source="get_provider_type_display", read_only=True)
+
+    class Meta:
+        model = SupportedBank
+        fields = [
+            "id",
+            "name",
+            "code",
+            "provider_type",
+            "provider_type_display",
+            "account_number_label",
+            "is_active",
+            "display_order",
+            "created_at",
+        ]
+        read_only_fields = ["id", "created_at"]
+
+
 class TeacherPayoutAccountSerializer(serializers.ModelSerializer):
     """Serializer for teacher payout bank account updates."""
 
@@ -292,6 +314,16 @@ class TeacherPayoutAccountSerializer(serializers.ModelSerializer):
             "payout_account_holder",
             "payout_phone",
         ]
+
+    def validate_payout_bank_name(self, value):
+        val = value.strip()
+        if val:
+            valid = SupportedBank.objects.filter(name__iexact=val, is_active=True).exists()
+            if not valid:
+                raise serializers.ValidationError(
+                    f"'{val}' is not an authorized payment provider. Please choose from the approved list."
+                )
+        return val
 
 
 class StudentProfileSerializer(serializers.ModelSerializer):

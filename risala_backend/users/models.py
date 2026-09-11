@@ -548,6 +548,52 @@ class TimeSlot(TimeStampedModel, UUIDModel):
         return f"{self.teacher.user.username} - {self.start_time.strftime('%Y-%m-%d %H:%M')}"
 
 
+class SupportedBank(TimeStampedModel, UUIDModel):
+    """
+    Admin-managed supported bank or mobile payment provider.
+    Teachers can only choose from these approved options when configuring their payout account.
+    """
+
+    class ProviderType(models.TextChoices):
+        BANK = "BANK", _("Commercial Bank")
+        MOBILE_WALLET = "MOBILE_WALLET", _("Mobile Wallet / Telebirr")
+        OTHER = "OTHER", _("Other Authorized Provider")
+
+    name = models.CharField(
+        max_length=120,
+        unique=True,
+        help_text=_("Display name, e.g. Commercial Bank of Ethiopia (CBE)"),
+    )
+    code = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text=_("Short identifier or code, e.g. CBE, TELEBIRR"),
+    )
+    provider_type = models.CharField(
+        max_length=30,
+        choices=ProviderType.choices,
+        default=ProviderType.BANK,
+    )
+    account_number_label = models.CharField(
+        max_length=80,
+        default="Account Number",
+        help_text=_("Placeholder/label, e.g. Account Number or Phone Number"),
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text=_("Whether teachers can select this bank for payouts"),
+    )
+    display_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        verbose_name = "Supported Bank"
+        verbose_name_plural = "Supported Banks"
+        ordering = ["display_order", "name"]
+
+    def __str__(self):
+        return f"{self.name} ({self.get_provider_type_display()})"
+
+
 # Import attendance & escrow models for discovery by Django models
 from risala_backend.users.models_attendance import (  # noqa: E402
     SessionAttendance,
