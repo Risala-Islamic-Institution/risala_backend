@@ -1,0 +1,962 @@
+Developer integration kit
+
+Simple docs for humans, AI agents, and backend developers
+Download only the public, stable API surface. Paste the AI prompt into ChatGPT, Codex, Cursor, Claude, or any coding assistant so it understands ShegerPay without guessing private endpoints.
+
+
+AI Prompt
+Best for AI tools and quick onboarding.
+
+OpenAPI
+Best for SDK generators and API clients.
+
+Postman
+Best for manual endpoint testing.
+
+Complete Package
+Prompt, endpoints, OpenAPI, Postman, and MCP config.
+Quick Start
+Get up and running with ShegerPay in minutes.
+
+1. Install the SDK
+
+npm install @shegerpay/sdk
+
+2. Verify a payment
+
+import ShegerPay from '@shegerpay/sdk';
+
+const client = new ShegerPay('sk_test_YOUR_API_KEY');
+
+const result = await client.verify({
+  provider: 'telebirr',
+  transactionId: 'DHQ56AE0I7',
+  amount: 500,
+});
+
+console.log(result.verified); // true
+
+// CBE is verified from the receipt image — see "Verify a CBE payment" below.
+
+Or use cURL directly
+
+curl -X POST https://api.shegerpay.com/api/v1/verify \
+  -H "X-API-Key: sk_test_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"telebirr","transaction_id":"DHQ56AE0I7","amount":500}'
+
+Authentication
+All API requests require authentication. ShegerPay supports two methods:
+
+X-API-Key (Server-to-Server)
+
+Use for backend integrations, SDKs, and server-side calls.
+
+X-API-Key: sk_live_YOUR_API_KEY
+
+Works with all endpoints. Recommended for production.
+
+Authorization: Bearer (Firebase or Compatibility)
+
+Use Firebase ID tokens for dashboard/frontend. Bearer API keys are also accepted for backward compatibility.
+
+Authorization: Bearer FIREBASE_ID_TOKEN
+# or: Authorization: Bearer sk_live_YOUR_API_KEY
+
+For new server integrations, use X-API-Key.
+
+Which should I use?
+
+• Building a backend integration? → Use X-API-Key
+
+• Building a frontend app? → Use Authorization: Bearer with Firebase
+
+• Both headers work on all authenticated endpoints. If both are provided, X-API-Key takes priority.
+
+Test Keys
+
+Prefix: sk_test_, safe for development, no real transactions
+
+Live Keys
+
+Prefix: sk_live_: runs live verification and provider operations, keep secret
+
+Demo Sandbox Key
+
+Try the API instantly without creating an account:
+
+X-API-Key: sk_test_demo
+
+This built-in key works on all endpoints in test mode. Verification always succeeds (unless transaction ID contains "FAIL"). No real money is processed.
+
+Custody Model
+
+ShegerPay does not hold customer funds. Ethiopian verification endpoints (/verify, /verify-image, /quick-verify) are non-custodial and settle on bank/provider rails. Card rails may include temporary authorization holds by issuing/acquiring processors; those holds are external to ShegerPay custody.
+
+Standard Verification Response
+
+{
+  "verified": true,
+  "valid": true,
+  "status": "verified",
+  "mode": "test",
+  "request_id": "req_abc123",
+  "reference_id": "SHGR-...",
+  "saved": true
+}
+
+verified and valid are both returned for compatibility. New integrations should read verified.
+
+Common Error Codes
+
+400 missing/invalid request fields or receipt image has no transaction.
+
+401 missing, invalid, revoked, or wrong API key.
+
+402 plan or monthly quota does not allow this action.
+
+429 rate limit reached. Retry after the response window.
+
+503 provider/OCR service is temporarily unavailable.
+
+API Keys
+Manage your API keys programmatically.
+
+
+POST
+/api-keys/generate
+Generate API key
+
+POST
+/api-keys/generate-full-set
+Generate test+live key pair
+
+GET
+/api-keys
+List API keys
+
+POST
+/api-keys/validate
+Validate API key
+
+POST
+/api-keys/{id}/rotate
+Rotate API key
+
+DELETE
+/api-keys/{id}
+Delete API key
+Ethiopian Banks
+Verify payments from CBE, Telebirr, Awash, Dashen, eBirr, CBEBirr, M-Pesa, and more.
+
+Supported Providers
+
+cbe
+telebirr
+boa
+awash
+dashen
+ebirr_kaafi
+ebirr_coop
+cbebirr
+mpesa
+M-Pesa is relay-backed in v1. Use transaction_id plus phone_number. It is excluded from OCR auto-detect and quick-verify.
+
+BOA uses the full receipt URL or full trx lookup value plus sender_account. Short FT references are not enough for BOA.
+
+
+POST
+/verify
+Verify Ethiopian payment
+
+POST
+/verify-image
+Upload image/PDF, OCR auto-detect + verify payment
+
+POST
+/quick-verify
+Auto-detect provider and verify (parallel low-confidence checks + async processing)
+
+GET
+/verify/jobs/{job_id}
+Poll async verification job status
+
+GET
+/history
+Get verification history
+
+GET
+/providers
+List supported Ethiopian providers
+Example: verify CBE payment (receipt image)
+
+curl -X POST https://api.shegerpay.com/api/v1/verify-image \
+  -H "X-API-Key: sk_test_YOUR_KEY" \
+  -F "provider=cbe" \
+  -F "amount=500" \
+  -F "merchant_name=My Shop" \
+  -F "screenshot=@cbe-receipt.jpg"
+
+CBE is verified from the receipt: the QR on it resolves against CBE's receipt service, and a typed FT… transaction ID is accepted again since 2026-09-13 (CBE looks it up with the last 8 digits of the receiving account, taken from the merchant's linked CBE account). If you already have the receipt link you can send it as the transaction_id to /verify instead:{"provider":"cbe","transaction_id":"https://mbreciept.cbe.com.et/v2-…"}. Other providers are unchanged. `/verify` accepts both JSON and form-encoded payloads.
+
+Example: verify M-Pesa payment
+
+curl -X POST https://api.shegerpay.com/api/v1/verify \
+  -H "X-API-Key: sk_live_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"mpesa","transaction_id":"RECEIPT_REFERENCE","phone_number":"251912345678","amount":5000,"merchant_name":"My Shop"}'
+
+M-Pesa is relay-backed in v1. phone_number is required, and image-only OCR detection is not supported for this provider yet.
+
+Example: verify BOA payment
+
+curl -X POST https://api.shegerpay.com/api/v1/verify \
+  -H "X-API-Key: sk_live_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"boa","transaction_id":"https://cs.bankofabyssinia.com/slip/?trx=FT26091B1X5152078","sender_account":"52078","amount":100,"merchant_name":"My Shop"}'
+
+For BOA, pass the full receipt URL or full trx value together with sender_account. Short FT references are rejected.
+
+⚠ eBirr & Awash require the FULL Receipt URL
+
+As of 2026 the eBirr and Awash receipt portals use opaque-token URLs. The numeric Ref/Txn ID alone no longer resolves to a receipt. Your integration must send transaction_idas the entire Receipt Link from the buyer's SMS.
+
+Error codes returned for bad input:
+
+EBIRR_NUMERIC_ID_ONLY — buyer sent the numeric Ref/Id instead of the full link
+EBIRR_LEGACY_URL_DEAD — old transactioninfo.ebirr.com URL (host retired)
+EBIRR_INVALID_FORMAT — unrecognised input
+AWASH_NUMERIC_TXNID_ONLY — buyer sent the numeric Txn ID instead of the Receipt Link
+AWASH_INVALID_FORMAT — unrecognised input
+All cases return HTTP 200 with {"valid":false, "status":"invalid_input", "error_code":"…", "reason":"…"}. Branch on error_code (not the prose) to handle this in your code.
+
+Example: verify eBirr Kaafi payment
+
+curl -X POST https://api.shegerpay.com/api/v1/verify \
+  -H "X-API-Key: sk_live_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"ebirr_kaafi","transaction_id":"https://receipt.ebirr.com/kaafimf/CI7t6ONdWKp-EWHQjog2Bw","amount":100,"merchant_name":"My Shop"}'
+
+Use ebirr_kaafi or ebirr_coop for the variant, or just ebirr — we auto-detect the variant from the URL path (/kaafimf/ vs /coopay/).
+
+Example: verify Awash payment
+
+curl -X POST https://api.shegerpay.com/api/v1/verify \
+  -H "X-API-Key: sk_live_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"awash","transaction_id":"https://awashpay.awashbank.com:8225/-2K8QOHKBGF-3TO39O","amount":2800,"merchant_name":"My Shop"}'
+
+Pass the full Receipt Link from the buyer's Awash SMS. The bare token -2K8QOHKBGF-3TO39O is also accepted; the numeric Txn ID alone is rejected.
+
+Example: OCR image upload + verify
+
+curl -X POST https://api.shegerpay.com/api/v1/verify-image \
+  -H "X-API-Key: sk_live_YOUR_KEY" \
+  -F "amount=500" \
+  -F "merchant_name=My Shop" \
+  -F "screenshot=@/path/to/receipt.jpg"
+
+Provider is optional. Backend OCR auto-detects provider first, then verifies. You can also use /verify with multipart form-data and screenshot.
+
+Example: quick verify with async processing
+
+curl -X POST https://api.shegerpay.com/api/v1/quick-verify \
+  -H "X-API-Key: sk_live_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"transaction_id":"FT26062K7WMY","amount":5}'
+
+If receipt is not available yet, response returns 202 with status: "processing" and verification_job_id.
+
+curl -X GET https://api.shegerpay.com/api/v1/verify/jobs/JOB_ID \
+  -H "X-API-Key: sk_live_YOUR_KEY"
+
+Optional: reject if the sender name doesn't match
+
+Add expected_sender_name to any verification call to confirm who paid, not just that the payment happened. Works on /verify, /verify-image and /quick-verify. First name alone is enough — "Abebe" matches "Abebe Kebede". Case, word order and small typos are tolerated.
+
+curl -X POST https://api.shegerpay.com/api/v1/verify \
+  -H "X-API-Key: sk_live_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"cbe","transaction_id":"FT26062K7WMY","amount":500,"expected_sender_name":"Abebe Kebede"}'
+
+On a mismatch the payment is rejected and the transaction is not consumed — it can still be verified again with the correct name:
+
+{
+  "valid": false,
+  "status": "failed",
+  "provider_status": "sender_name_mismatch",
+  "sender_name_match": false,
+  "reason": "Rejected: sender name mismatch. The receipt sender does not match expected_sender_name."
+}
+
+Match → "valid": true with "sender_name_match": true.
+Receipt has no readable sender name → still verifies, with "sender_name_match": null. A real payment is never rejected over a missing bank field.
+Omit the field → behaviour is exactly as before. The check only runs when you send it.
+Crypto
+Accept USDT, USDC, BTC, ETH, TRX, LTC, SOL payments on-chain across TRON, BSC, Ethereum, Bitcoin, Litecoin, and Solana.
+
+Supported Networks
+
+tron
+ethereum
+bsc
+bitcoin
+litecoin
+solana
+
+GET
+/crypto/rates
+Get all crypto rates
+
+GET
+/crypto/rate/{symbol}
+Get single crypto rate
+
+POST
+/crypto/generate-intent
+Generate crypto payment intent
+
+POST
+/crypto/verify
+Verify crypto transaction
+
+POST
+/crypto/verify-reference
+Verify by reference ID
+
+GET
+/crypto/status
+Check crypto service status
+Example: verify USDT/TRON payment
+
+curl -X POST https://api.shegerpay.com/api/v1/crypto/verify \
+  -H "X-API-Key: sk_test_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"tx_hash":"abc123def456","network":"tron","expected_amount":50}'
+
+PayPal
+Create PayPal orders, checkout links, wallet balance views, and payout requests. Advanced vaulting/subscription APIs are available later from dashboard-guided flows, not the public quick-start docs.
+
+
+GET
+/paypal/status
+Check PayPal service status
+
+GET
+/paypal/client-token
+Get browser client token for PayPal checkout
+
+POST
+/paypal/create-order
+Create PayPal order
+
+POST
+/paypal/capture-order
+Capture PayPal order
+
+GET
+/paypal/order/{order_id}
+Get order details
+
+POST
+/paypal/refund
+Refund PayPal payment
+
+POST
+/paypal/payment-links
+Create PayPal checkout link
+
+GET
+/paypal/payment-links
+List PayPal checkout links
+
+GET
+/paypal/wallet/balance
+Get PayPal wallet balance
+
+GET
+/paypal/wallet/transactions
+List PayPal wallet transactions
+
+POST
+/paypal/payouts/request
+Request PayPal payout
+
+GET
+/paypal/payouts
+List PayPal payout requests
+
+POST
+/paypal/payout-accounts
+Add payout account
+
+GET
+/paypal/payout-accounts
+List payout accounts
+
+DELETE
+/paypal/payout-accounts/{account_type}
+Remove payout account
+Payment Links
+Generate shareable payment links that accept multiple payment methods.
+
+
+POST
+/payment-links
+Create payment link
+
+GET
+/payment-links
+List payment links
+
+GET
+/payment-links/{short_code}
+Get public payment link details
+
+GET
+/payment-links/{short_code}/qr
+Get payment link QR code
+
+GET
+/payment-links/{short_code}/status
+Check payment link status
+
+POST
+/payment-links/{short_code}/submit
+Submit customer payment proof
+
+POST
+/payment-links/{short_code}/verify
+Verify submitted payment
+
+DELETE
+/payment-links/{link_id}
+Delete payment link
+Example: create a payment link
+
+curl -X POST https://api.shegerpay.com/api/v1/payment-links \
+  -H "X-API-Key: sk_test_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Order #42","amount":1500,"currency":"ETB","enable_cbe":true,"enable_telebirr":true,"enable_mpesa":true}'
+
+Webhooks
+Receive real-time event notifications to your server.
+
+Supported Events
+
+payment.verified
+payment.failed
+payment.pending
+link.paid
+crypto.confirmed
+crypto.expired
+refund.created
+refund.completed
+
+POST
+/webhooks
+Create webhook
+
+GET
+/webhooks
+List webhooks
+
+DELETE
+/webhooks/{id}
+Delete webhook
+
+POST
+/webhooks/test
+Send test webhook (supports event_type param)
+
+GET
+/webhooks/events
+List supported events
+
+GET
+/webhooks/{id}/deliveries
+Get delivery logs (last 10)
+Webhook Payload Examples
+payment.verified (Ethiopian bank)
+
+{
+  "event": "payment.verified",
+  "timestamp": "2025-01-15T10:30:00Z",
+  "id": "delivery_abc123",
+  "data": {
+    "transaction_id": "FT123456789",
+    "provider": "cbe",
+    "amount": 500,
+    "currency": "ETB",
+    "status": "verified",
+    "merchant_name": "My Shop",
+    "verified_at": "2025-01-15T10:30:00Z"
+  }
+}
+
+crypto.confirmed
+
+{
+  "event": "crypto.confirmed",
+  "timestamp": "2025-01-15T10:30:00Z",
+  "id": "delivery_jkl012",
+  "data": {
+    "reference_id": "SHGR-CRY-G7H8I9",
+    "tx_hash": "0xabc123...",
+    "network": "tron",
+    "amount": 50.00,
+    "currency": "USDT",
+    "confirmations": 20,
+    "status": "confirmed"
+  }
+}
+
+link.paid
+
+{
+  "event": "link.paid",
+  "timestamp": "2025-01-15T10:30:00Z",
+  "id": "delivery_mno345",
+  "data": {
+    "link_id": "pl_abc123",
+    "short_code": "pay-xyz",
+    "amount": 1500,
+    "currency": "ETB",
+    "payment_method": "cbe",
+    "transaction_id": "FT987654321",
+    "customer_email": "customer@example.com"
+  }
+}
+
+Retry Behavior
+Failed webhook deliveries are retried with exponential backoff:
+
+1st
+
+Immediate
+
+2nd
+
+10 sec
+
+3rd
+
+30 sec
+
+4th
+
+1 min
+
+5th
+
+2 min
+
+After 5 failed attempts, the webhook is queued for later retry. A 2xx response is considered successful.
+
+Signature Verification
+Every webhook includes an HMAC-SHA256 signature in the X-ShegerPay-Signature header. Verify it to ensure the payload is authentic.
+
+Headers sent with every webhook:
+
+X-ShegerPay-Event: payment.verified
+X-ShegerPay-Delivery-ID: abc123def456
+X-ShegerPay-Signature: sha256=<hmac_hex_digest>
+Content-Type: application/json
+User-Agent: ShegerPay-Webhook/2.0
+
+Verify in Python
+
+import hmac, hashlib
+
+def verify_webhook(payload_body: str, signature_header: str, secret: str) -> bool:
+    expected = hmac.new(secret.encode(), payload_body.encode(), hashlib.sha256).hexdigest()
+    provided = signature_header.replace("sha256=", "")
+    return hmac.compare_digest(expected, provided)
+
+Verify in Node.js
+
+const crypto = require('crypto');
+
+function verifyWebhook(body, signatureHeader, secret) {
+  const expected = crypto.createHmac('sha256', secret).update(body).digest('hex');
+  const provided = signatureHeader.replace('sha256=', '');
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(provided));
+}
+
+Testing Webhooks
+Send a test event to verify your endpoint is working:
+
+curl -X POST https://api.shegerpay.com/api/v1/webhooks/test?webhook_id=YOUR_WEBHOOK_ID \
+  -H "X-API-Key: sk_test_YOUR_KEY"
+
+This sends a sample payment.verified event with test data to your webhook URL.
+
+You can also test specific event types:
+
+curl -X POST https://api.shegerpay.com/api/v1/webhooks/test?webhook_id=YOUR_WEBHOOK_ID&event_type=crypto.confirmed \
+  -H "X-API-Key: sk_test_YOUR_KEY"
+
+Supported public event types: payment.verified, payment.failed, payment.pending, crypto.confirmed, crypto.expired, link.paid, refund.created, refund.completed
+
+Delivery Logs
+Every webhook delivery is logged. View the last 10-50 delivery attempts per webhook, including status codes, retry counts, and timestamps.
+
+curl https://api.shegerpay.com/api/v1/webhooks/YOUR_WEBHOOK_ID/deliveries?limit=10 \
+  -H "X-API-Key: sk_test_YOUR_KEY"
+
+Response:
+
+{
+  "webhook_id": "abc123",
+  "deliveries": [
+    {
+      "id": "del_001",
+      "event": "payment.verified",
+      "success": true,
+      "status_code": 200,
+      "response": "OK",
+      "attempts": 1,
+      "timestamp": "2026-02-24T10:30:00"
+    },
+    {
+      "id": "del_002",
+      "event": "payment.failed",
+      "success": false,
+      "status_code": 500,
+      "response": "Internal Server Error",
+      "attempts": 5,
+      "timestamp": "2026-02-24T09:15:00"
+    }
+  ]
+}
+
+Delivery logs are also visible in the Dashboard under Webhooks → Logs for each endpoint.
+
+Transactions
+Browse, analyze, and export transaction history. PayPal wallet balance and payout endpoints are documented in the PayPal section; private verification-only rails are intentionally hidden.
+
+
+GET
+/transactions/history
+Get transaction history
+
+GET
+/transactions/analytics
+Get transaction analytics
+
+GET
+/transactions/export
+Export transactions as CSV
+Export Transactions (CSV)
+Download your full transaction history as a CSV file for accounting, reporting, or reconciliation.
+
+curl https://api.shegerpay.com/api/v1/transactions/export \
+  -H "X-API-Key: sk_live_YOUR_KEY" \
+  -o shegerpay_transactions.csv
+
+CSV columns:
+
+date
+transaction_id
+provider
+amount
+currency
+status
+customer
+description
+Returns up to 1,000 transactions. The file downloads with a timestamped filename like shegerpay_transactions_20260224.csv.
+
+Rate Limits
+API requests are rate-limited per user (authenticated) or per IP (unauthenticated).
+
+Endpoint	Limit	Window
+/verify, /quick-verify	100 req	60 sec
+/payment-links	50 req	60 sec
+/webhooks	30 req	60 sec
+/api-keys	20 req	60 sec
+/auth, /two-factor	5-10 req	60 sec
+All other endpoints	200 req	60 sec
+Rate limit headers are included in every response: X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Window. After 10 consecutive violations, your IP/user is locked out for 5 minutes.
+
+Logos & Assets
+Use these logos in your checkout pages and payment forms.
+
+Logos API Endpoint
+
+Get all logos programmatically, no auth required:
+
+GET https://api.shegerpay.com/api/v1/assets/logos
+
+Returns JSON with all provider and crypto logos, filenames, and download URLs.
+
+Download All as JSON
+Payment Providers & Banks
+Wise
+Wise
+Download
+Payoneer
+Payoneer
+Download
+Skrill
+Skrill
+Download
+PayPal
+PayPal
+Download
+Binance Pay
+Binance Pay
+Download
+Bybit
+Bybit
+Download
+OKX
+OKX
+Download
+MEXC
+MEXC
+Download
+Dukascopy
+Dukascopy
+Download
+CBE
+CBE
+Download
+Awash Bank
+Awash Bank
+Download
+Dashen Bank
+Dashen Bank
+Download
+Telebirr
+Telebirr
+Download
+eBirr
+eBirr
+Download
+CBEBirr
+CBEBirr
+Download
+M-Pesa
+M-Pesa
+Download
+Crypto Networks
+TRON (TRX)
+TRON (TRX)
+Download
+Ethereum
+Ethereum
+Download
+BNB Chain
+BNB Chain
+Download
+Bitcoin
+Bitcoin
+Download
+USDT
+USDT
+Download
+JSON manifest format
+
+{
+  "name": "Wise",
+  "category": "provider",
+  "filename": "wise.jpg",
+  "url": "/assets/providers/wise.jpg",
+  "format": "png"
+}
+
+SDKs & Tools
+Official SDKs, CLI, and MCP server for AI-assisted development.
+
+JavaScript / TypeScript SDK
+npm install @shegerpay/sdk
+
+import ShegerPay from '@shegerpay/sdk';
+
+const client = new ShegerPay(process.env.SHEGERPAY_API_KEY);
+
+// Verify Ethiopian payment
+const result = await client.verify({ provider: 'telebirr', transactionId: 'DHQ56AE0I7', amount: 500 });
+
+// Create payment link
+const link = await client.createPaymentLink({ title: 'Order', amount: 1500, currency: 'ETB' });
+
+// Get crypto rates
+const rates = await client.getCryptoPrices();
+
+Python SDK
+pip install shegerpay
+
+from shegerpay import ShegerPay
+
+client = ShegerPay(api_key="sk_test_YOUR_KEY")
+
+result = client.verify(provider="telebirr", transaction_id="DHQ56AE0I7", amount=500)
+print(result["verified"])  # True
+
+CLI
+npm install -g @shegerpay/cli
+
+shegerpay verify FT123456789 --amount 500
+shegerpay status
+shegerpay links create --title "Order" --amount 1500
+shegerpay links list
+shegerpay webhooks list
+
+MCP Server (AI Integration)
+Use ShegerPay directly from Claude, Cursor, Cline, and other AI tools.
+
+npm install -g @shegerpay/mcp-server
+
+claude_desktop_config.json
+
+{
+  "mcpServers": {
+    "shegerpay": {
+      "command": "npx",
+      "args": ["-y", "@shegerpay/mcp-server"],
+      "env": {
+        "SHEGERPAY_API_KEY": "sk_test_YOUR_KEY"
+      }
+    }
+  }
+}
+
+Need help?
+
+Email support@shegerpay.com or join our Telegram community.
+
+FAQ
+Common questions from developers integrating ShegerPay.
+
+When should I use X-API-Key vs Authorization: Bearer?
+
+Use X-API-Key for server-to-server integrations (your backend calling our API). Use Authorization: Bearer with a Firebase ID token for frontend/dashboard calls. Authorization with sk_/pk_ API keys is also accepted for compatibility, but X-API-Key is preferred for new integrations. If both are provided, X-API-Key takes priority.
+
+Does ShegerPay hold customer funds?
+
+ShegerPay does not hold customer funds. Ethiopian bank/mobile and crypto verification flows settle directly on provider rails. Card payments can have temporary authorization holds by issuing/acquiring processors, but that is processor behavior, not ShegerPay custody.
+
+What happened to POST /international/gmail/setup?
+
+That old setup endpoint is not part of the public API. Non-PayPal international verification is private/assisted right now, so public docs focus on PayPal, Ethiopian verification, crypto, payment links, and webhooks.
+
+Which international providers are supported?
+
+PayPal is the public international product for checkout, balance, and payout workflows. Other international rails are verification-only/private setup right now and are intentionally hidden from public API docs.
+
+Does a webhook fire when a payment is auto-verified via email?
+
+For private/assisted international verification setups, webhook events can be enabled by support. Public docs currently focus on PayPal, Ethiopian verification, crypto, payment links, and standard webhooks.
+
+Do you retry failed webhook deliveries?
+
+Yes. We retry up to 5 times with exponential backoff: immediate → 10s → 30s → 1min → 2min. After all retries fail, the webhook is queued for later retry. A 2xx response is considered successful.
+
+How can I test webhooks?
+
+Use POST /webhooks/test with your webhook_id and optional event_type parameter to send a sample event for any supported type. In the dashboard, each webhook has a dropdown to select the event type before clicking Test. You can also use test API keys (sk_test_) which process test transactions that trigger real webhook deliveries.
+
+Is there a sandbox for international payments?
+
+Use test API keys (sk_test_) for public PayPal and verification flows. Non-PayPal international setup is private/assisted right now and does not create wallet balance or payout funds.
+
+How fast is auto-verification after email forwarding?
+
+Email-forwarding auto-verification is available only for private/assisted international setups right now. Public integrations should use PayPal checkout/payouts, Ethiopian verification, crypto verification, and payment links.
+
+Can I export my transactions?
+
+Yes. Use GET /transactions/export to download a CSV file with all your transactions (up to 1,000). Includes date, transaction ID, provider, amount, currency, status, customer, and description columns.
+
+How do I see webhook delivery history?
+
+Use GET /webhooks/{id}/deliveries to fetch the last 10-50 delivery attempts for any webhook. Each log entry includes the event type, HTTP status code, retry count, and timestamp. You can also view delivery logs in the Dashboard under Webhooks, Logs.
+
+Can I link Ethiopian banks via API?
+
+Ethiopian bank verification (CBE, Telebirr, etc.) works via the /verify endpoint, no account linking needed — pass the provider and transaction_id. CBE is the exception: it is verified from the receipt itself, so upload the receipt image to /verify-image (or pass the mbreciept.cbe.com.et receipt link as the transaction_id).
+
+How do I set a default international account?
+
+Default international account management is hidden from public docs while non-PayPal international rails remain private/assisted. Use the PayPal section for public international checkout and payout workflows.
+
+Are there rate limits?
+
+Yes. Verification endpoints allow 100 req/min, payment links 50 req/min, and most other endpoints 200 req/min. Check X-RateLimit-Remaining headers in responses. See the Rate Limits section above.
+
+API Changelog
+Notable changes to the ShegerPay API.
+
+v2.5.0
+Aug 2026
+•
+NEW: optional sender-name check — pass expected_sender_name on /verify, /verify-image or /quick-verify to reject receipts whose sender name does not match (first name alone is enough)
+•
+Mismatches return provider_status "sender_name_mismatch" without consuming the transaction ID — fix the name and retry
+•
+Responses include sender_name_match (true / false / null when the receipt has no readable sender name)
+•
+Available in the TypeScript SDK (expectedSenderName) and Python SDK (expected_sender_name) from v2.3.0
+v2.4.0
+Mar 2026
+•
+Improved passkey and email sign-in flow with clearer account recovery guidance
+•
+Added a more reliable public demo flow with backend-backed crypto rates
+•
+Strengthened subscription limit enforcement across dashboard and demo usage
+•
+Improved transaction history details with clearer timelines and masked troubleshooting context
+•
+Increased Ethiopian bank verification reliability for CBE and BOA matching flows
+•
+Stabilized analytics and mode-aware reporting for API-key based merchants
+•
+Improved route-aware loading states and clarified non-custodial product messaging
+v2.3.0
+Feb 2026
+•
+Webhook test endpoint now supports event_type parameter for per-event testing
+•
+Added webhook delivery logs (GET /webhooks/{id}/deliveries)
+•
+Transaction CSV export (GET /transactions/export)
+•
+Email polling interval reduced to 15s for faster auto-verification
+•
+Added public webhook delivery logs, payment events, link.paid, refund.created, and refund.completed events
+v2.2.0
+Jan 2026
+•
+Public logos API endpoint (GET /assets/logos), no auth required
+•
+Crypto exchange auto-verification (Binance Pay, OKX, MEXC, Bybit)
+•
+Email forwarding with Gmail filter generation
+•
+Webhook HMAC-SHA256 signature verification
+•
+Exponential backoff retry (5 attempts) for webhook delivery
+v2.1.0
+Dec 2025
+•
+Private/assisted verification for non-PayPal international rails
+•
+Payment links with multi-provider support
+•
+API key rotation and scoped permissions
+•
+Rate limiting with X-RateLimit headers
+v2.0.0
+Nov 2025
+•
+Initial public API release
+•
+Ethiopian bank verification (CBE, Telebirr, Awash, Dashen, BoA)
+•
+Solana & Tron crypto payments
+•
+Webhook system with secret signing
+•
+JavaScript SDK, Python SDK, CLI, MCP Server

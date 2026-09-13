@@ -169,61 +169,309 @@ class ChapaService:
 class ShegerService:
     """
     Automated transaction verification via Sheger API.
-    Verifies bank/Telebirr transaction reference numbers automatically.
+    Strictly follows official ShegerPay API specification (v2.5.0):
+    - Base URL: https://api.shegerpay.com/api/v1
+    - Auth: X-API-Key header (supported: test, live, or demo keys)
+    - Supports JSON transaction verification (/verify)
+    - Supports OCR Receipt Image verification (/verify-image)
+    - Auto-normalizes Ethiopian providers (cbe, telebirr, boa, awash, dashen, ebirr_kaafi, ebirr_coop, cbebirr, mpesa)
     """
+    BASE_URL = "https://api.shegerpay.com/api/v1"
+
+    PROVIDER_MAP = {
+        "cbe": "cbe",
+        "commercial bank of ethiopia": "cbe",
+        "commercial bank of ethiopia (cbe)": "cbe",
+        "telebirr": "telebirr",
+        "tele birr": "telebirr",
+        "boa": "boa",
+        "bank of abyssinia": "boa",
+        "abyssinia": "boa",
+        "awash": "awash",
+        "awash bank": "awash",
+        "dashen": "dashen",
+        "dashen bank": "dashen",
+        "ebirr": "ebirr_kaafi",
+        "ebirr kaafi": "ebirr_kaafi",
+        "kaafi": "ebirr_kaafi",
+        "coop": "ebirr_coop",
+        "cooperative bank of oromia": "ebirr_coop",
+        "coopay": "ebirr_coop",
+        "cbebirr": "cbebirr",
+        "cbe birr": "cbebirr",
+        "mpesa": "mpesa",
+        "m-pesa": "mpesa",
+    }
+
+    @classmethod
+    def get_api_key(cls) -> str:
+        config = PaymentGatewayConfig.get_solo()
+        if config.sheger_api_key and config.sheger_api_key.strip():
+            return config.sheger_api_key.strip()
+        settings_key = getattr(settings, "SHEGERPAY_API_KEY", "")
+        if settings_key and str(settings_key).strip():
+            return str(settings_key).strip()
+        import os
+        return os.environ.get("SHEGERPAY_API_KEY", "").strip()
+
+    @classmethod
+    def get_base_url(cls) -> str:
+        config = PaymentGatewayConfig.get_solo()
+        url = (config.sheger_api_url or cls.BASE_URL).strip().rstrip("/")
+        if not url.endswith("/api/v1"):
+            url = f"{url}/api/v1"
+        return url
+
+    @classmethod
+    def normalize_provider(cls, bank_name: str) -> str:
+        if not bank_name:
+            return "cbe"
+        normalized = bank_name.strip().lower()
+        for key, val in cls.PROVIDER_MAP.items():
+            if key in normalized:
+                return val
+        return "cbe"
+
     @classmethod
     def verify_transaction(
         cls,
         transaction_id: str,
         expected_amount: Decimal,
         bank_name: str = "",
+        expected_sender_name: str = "",
     ) -> dict:
         """
-        Calls the configured Sheger API endpoint to verify transaction authenticity.
+        Calls POST /api/v1/verify
         """
-        config = PaymentGatewayConfig.get_solo()
-        api_key = config.sheger_api_key.strip()
-        api_url = (config.sheger_api_url or "https://api.shegerpay.com").strip().rstrip("/")
-
+        api_key = cls.get_api_key()
         if not api_key:
-            logger.warning("Sheger API key not configured; cannot auto-verify transaction.")
+            logger.warning("ShegerPay API key not configured; cannot auto-verify transaction.")
             return {
                 "verified": False,
-                "error": "Sheger API credentials are not configured.",
+                "error": "ShegerPay API key is not configured.",
                 "pending_manual_review": True,
             }
 
+        provider = cls.normalize_provider(bank_name)
         headers = {
+            "X-API-Key": api_key,
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        payload = {
-            "transaction_id": transaction_id,
-            "amount": float(expected_amount),
-            "bank": bank_name,
-        }
 
-        endpoint = f"{api_url}/api/v1/verify"
+        payload = {
+            "provider": provider,
+            "transaction_id": transaction_id.strip(),
+            "amount": float(expected_amount),
+            "merchant_name": "Risala",
+        }
+        if expected_sender_name:
+            payload["expected_sender_name"] = expected_sender_name
+
+        endpoint = f"{cls.get_base_url()}/verify"
+        logger.info(f"Calling ShegerPay /verify for provider={provider}, tx={transaction_id}, amount={expected_amount}")
+
         try:
-            response = requests.post(endpoint, json=payload, headers=headers, timeout=15)
-            data = response.json()
-            if response.status_code == 200 and data.get("verified") is True:
+            response = requests.post(endpoint, json=payload, headers=headers, timeout=20)
+            try:
+                data = response.json()
+            except Exception:
+                data = {"raw_text": response.text}
+
+            is_verified = (
+                response.status_code == 200 and (
+                    data.get("verified") is True or
+                    data.get("valid") is True or
+                    data.get("status") == "verified"
+                )
+            )
+
+            if is_verified:
                 return {
                     "verified": True,
+                    "status": "verified",
                     "transaction_id": transaction_id,
+                    "reference_id": data.get("reference_id") or data.get("request_id") or transaction_id,
+                    "provider": provider,
                     "raw": data,
                 }
             else:
+                reason = data.get("reason") or data.get("message") or data.get("error") or "Transaction could not be verified by ShegerPay."
+                provider_status = data.get("provider_status") or data.get("status") or "unverified"
                 return {
                     "verified": False,
-                    "error": data.get("message", "Transaction not verified by Sheger."),
+                    "status": provider_status,
+                    "reason": reason,
+                    "error": reason,
                     "pending_manual_review": True,
                     "raw": data,
                 }
         except Exception as e:
-            logger.exception(f"Sheger verification network error: {e}")
+            logger.exception(f"ShegerPay network exception: {e}")
             return {
                 "verified": False,
-                "error": f"Sheger network error: {str(e)}",
+                "status": "network_error",
+                "error": f"ShegerPay network connection error: {str(e)}",
                 "pending_manual_review": True,
             }
+
+    @classmethod
+    def verify_receipt_image(
+        cls,
+        image_file_or_path,
+        expected_amount: Decimal,
+        bank_name: str = "",
+        expected_sender_name: str = "",
+    ) -> dict:
+        """
+        Calls POST /api/v1/verify-image with OCR auto-detect.
+        """
+        api_key = cls.get_api_key()
+        if not api_key:
+            return {
+                "verified": False,
+                "error": "ShegerPay API key is not configured.",
+                "pending_manual_review": True,
+            }
+
+        provider = cls.normalize_provider(bank_name) if bank_name else ""
+        headers = {
+            "X-API-Key": api_key,
+            "Authorization": f"Bearer {api_key}",
+        }
+
+        data_fields = {
+            "amount": str(float(expected_amount)),
+            "merchant_name": "Risala",
+        }
+        if provider:
+            data_fields["provider"] = provider
+        if expected_sender_name:
+            data_fields["expected_sender_name"] = expected_sender_name
+
+        endpoint = f"{cls.get_base_url()}/verify-image"
+        logger.info(f"Calling ShegerPay /verify-image with amount={expected_amount}, provider={provider}")
+
+        try:
+            files = {}
+            if hasattr(image_file_or_path, "read"):
+                # In-memory or Django File object
+                image_file_or_path.seek(0)
+                filename = getattr(image_file_or_path, "name", "receipt.jpg")
+                files["screenshot"] = (filename, image_file_or_path.read(), "image/jpeg")
+            elif isinstance(image_file_or_path, str):
+                import os
+                if os.path.exists(image_file_or_path):
+                    with open(image_file_or_path, "rb") as f:
+                        files["screenshot"] = (os.path.basename(image_file_or_path), f.read(), "image/jpeg")
+
+            if not files:
+                return {
+                    "verified": False,
+                    "error": "No valid receipt file data to upload.",
+                    "pending_manual_review": True,
+                }
+
+            response = requests.post(endpoint, data=data_fields, files=files, headers=headers, timeout=30)
+            try:
+                data = response.json()
+            except Exception:
+                data = {"raw_text": response.text}
+
+            is_verified = (
+                response.status_code == 200 and (
+                    data.get("verified") is True or
+                    data.get("valid") is True or
+                    data.get("status") == "verified"
+                )
+            )
+
+            if is_verified:
+                ref = data.get("reference_id") or data.get("transaction_id") or data.get("request_id")
+                return {
+                    "verified": True,
+                    "status": "verified",
+                    "reference_id": ref,
+                    "transaction_id": data.get("transaction_id") or ref,
+                    "provider": data.get("provider") or provider,
+                    "raw": data,
+                }
+            else:
+                reason = data.get("reason") or data.get("message") or data.get("error") or "Receipt could not be verified by ShegerPay OCR."
+                return {
+                    "verified": False,
+                    "status": data.get("status", "unverified"),
+                    "reason": reason,
+                    "error": reason,
+                    "pending_manual_review": True,
+                    "raw": data,
+                }
+        except Exception as e:
+            logger.exception(f"ShegerPay verify-image exception: {e}")
+            return {
+                "verified": False,
+                "status": "network_error",
+                "error": f"ShegerPay OCR connection error: {str(e)}",
+                "pending_manual_review": True,
+            }
+
+    @classmethod
+    def verify_payment_record(cls, payment, actor=None) -> dict:
+        """
+        High-level verification for a Payment model instance.
+        Runs verify_receipt_image if receipt uploaded, or verify_transaction if transaction ID present.
+        """
+        sender_name = ""
+        user = payment.user or (payment.order.student.user if payment.order and hasattr(payment.order, "student") else None)
+        if user:
+            sender_name = user.full_name or user.username
+
+        result = {"verified": False, "error": "No transaction ID or receipt uploaded."}
+
+        # 1. First priority: receipt image verification if available (especially essential for CBE)
+        if payment.manual_receipt_image:
+            try:
+                result = cls.verify_receipt_image(
+                    image_file_or_path=payment.manual_receipt_image.file,
+                    expected_amount=payment.amount,
+                    bank_name=payment.bank_name,
+                    expected_sender_name=sender_name,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to read manual_receipt_image file: {e}")
+
+        # 2. If not verified yet and manual_transaction_id exists, try /verify
+        if not result.get("verified") and payment.manual_transaction_id and payment.manual_transaction_id.strip():
+            result = cls.verify_transaction(
+                transaction_id=payment.manual_transaction_id.strip(),
+                expected_amount=payment.amount,
+                bank_name=payment.bank_name,
+                expected_sender_name=sender_name,
+            )
+
+        # 3. If verified, update the payment model and activate associated orders atomically
+        if result.get("verified") is True:
+            from risala_backend.payments.models import Payment
+            from risala_backend.payments.views import _confirm_order_payment, _confirm_course_enrollment
+
+            ref = result.get("reference_id") or payment.manual_transaction_id or ""
+            note = f"Auto-verified via ShegerPay (Ref: {ref})"
+            payment.verified_by = Payment.VerifiedBy.SHEGER_API
+            if result.get("transaction_id") and not payment.manual_transaction_id:
+                payment.manual_transaction_id = result.get("transaction_id")
+
+            if payment.order:
+                _confirm_order_payment(payment.order, payment, note=note)
+            elif payment.course and payment.user:
+                _confirm_course_enrollment(payment.course, payment.user, payment, note=note)
+            else:
+                payment.status = Payment.Status.COMPLETED
+                payment.admin_note = note
+                payment.save(update_fields=["status", "verified_by", "admin_note", "manual_transaction_id", "updated_at"])
+
+            result["status"] = "COMPLETED"
+            result["payment_id"] = str(payment.id)
+            result["message"] = "Payment successfully verified by ShegerPay! Linked sessions/course confirmed."
+
+        return result
+

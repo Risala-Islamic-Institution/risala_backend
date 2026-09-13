@@ -12,6 +12,8 @@ from risala_backend.payments.views import (
     AdminManualPaymentsView,
     AdminManualPaymentApproveView,
     AdminManualPaymentRejectView,
+    AdminShegerVerifyPaymentView,
+    ShegerWebhookView,
 )
 
 app_name = "payments"
@@ -32,6 +34,9 @@ urlpatterns = [
     path("chapa/verify/", ChapaVerifyView.as_view(), name="chapa_verify"),
     path("chapa/webhook/", ChapaWebhookView.as_view(), name="chapa_webhook"),
 
+    # ShegerPay Webhook
+    path("sheger/webhook/", ShegerWebhookView.as_view(), name="sheger_webhook"),
+
     # Manual Bank Transfer / Telebirr submission
     path("manual/submit/", SubmitManualPaymentView.as_view(), name="manual_submit"),
 
@@ -43,4 +48,5 @@ urlpatterns = [
     path("admin/manual-payments/", AdminManualPaymentsView.as_view(), name="admin_manual_payments"),
     path("admin/manual-payments/<str:payment_id>/approve/", AdminManualPaymentApproveView.as_view(), name="admin_approve_payment"),
     path("admin/manual-payments/<str:payment_id>/reject/", AdminManualPaymentRejectView.as_view(), name="admin_reject_payment"),
+    path("admin/manual-payments/<str:payment_id>/sheger-verify/", AdminShegerVerifyPaymentView.as_view(), name="admin_sheger_verify_payment"),
 ]

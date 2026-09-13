@@ -23,3 +23,7 @@ STRIPE_WEBHOOK_SECRET=whsec_REPLACE_ME
 
 STRIPE_SUCCESS_URL=http://localhost:3333/dashboard/student?session_id={CHECKOUT_SESSION_ID}
 STRIPE_CANCEL_URL=http://localhost:3333/dashboard/student?payment=cancelled
+
+# SHEGERPAY
+# ------------------------------------------------------------------------------
+# SHEGERPAY_API_KEY=sk_test_REPLACE_ME

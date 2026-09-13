@@ -430,16 +430,21 @@ class SubmitManualPaymentView(APIView):
             )
 
         transaction_id = (request.data.get("transaction_id") or "").strip()
-        if not transaction_id:
+        receipt_image = request.FILES.get("receipt_image")
+        order_id = request.data.get("order_id")
+        course_id = request.data.get("course_id")
+        bank_name = (request.data.get("bank_name") or "").strip()
+
+        # At least one proof of transfer must be provided (either reference ID or receipt screenshot)
+        if not transaction_id and not receipt_image:
             return Response(
-                {"error": "transaction_id (Bank/Telebirr reference number) is required."},
+                {"error": "Please enter a transaction reference number or upload your payment receipt screenshot."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        order_id = request.data.get("order_id")
-        course_id = request.data.get("course_id")
-        bank_name = request.data.get("bank_name", "")
-        receipt_image = request.FILES.get("receipt_image")
+        # Generate provisional reference if only receipt image was attached
+        if not transaction_id:
+            transaction_id = f"SLIP-{uuid.uuid4().hex[:8].upper()}"
 
         order = None
         course = None
@@ -462,53 +467,53 @@ class SubmitManualPaymentView(APIView):
         else:
             return Response({"error": "Either order_id or course_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Create or update Payment record in UNDER_REVIEW
+        # Look for existing pending payment record for this order/course, or create new
         tx_ref = f"manual-{transaction_id}-{uuid.uuid4().hex[:6]}"
-        payment, _ = Payment.objects.update_or_create(
-            manual_transaction_id=transaction_id,
-            defaults={
-                "user": request.user,
-                "order": order,
-                "course": course,
-                "payment_method": Payment.PaymentMethod.MANUAL_BANK,
-                "tx_ref": tx_ref,
-                "amount": amount,
-                "currency": "etb",
-                "bank_name": bank_name,
-                "status": Payment.Status.UNDER_REVIEW,
-                "verified_by": Payment.VerifiedBy.MANUAL_ADMIN,
-            }
-        )
-        if receipt_image:
-            payment.manual_receipt_image = receipt_image
-            payment.save(update_fields=["manual_receipt_image"])
+        payment = None
+        if order:
+            payment = Payment.objects.filter(order=order, status=Payment.Status.UNDER_REVIEW).first()
+        elif course:
+            payment = Payment.objects.filter(course=course, user=request.user, status=Payment.Status.UNDER_REVIEW).first()
+
+        if payment:
+            payment.manual_transaction_id = transaction_id
+            payment.bank_name = bank_name or payment.bank_name
+            payment.amount = amount
+            if receipt_image:
+                payment.manual_receipt_image = receipt_image
+            payment.save()
+        else:
+            payment = Payment.objects.create(
+                user=request.user,
+                order=order,
+                course=course,
+                payment_method=Payment.PaymentMethod.MANUAL_BANK,
+                tx_ref=tx_ref,
+                manual_transaction_id=transaction_id,
+                manual_receipt_image=receipt_image,
+                amount=amount,
+                currency="etb",
+                bank_name=bank_name,
+                status=Payment.Status.UNDER_REVIEW,
+                verified_by=Payment.VerifiedBy.MANUAL_ADMIN,
+            )
 
         # Check if automated Sheger API verification is configured
-        if config.manual_verification_mode == PaymentGatewayConfig.VerificationMode.SHEGER_API and config.sheger_api_key:
-            sheger_result = ShegerService.verify_transaction(
-                transaction_id=transaction_id,
-                expected_amount=amount,
-                bank_name=bank_name,
-            )
+        if config.manual_verification_mode == PaymentGatewayConfig.VerificationMode.SHEGER_API:
+            sheger_result = ShegerService.verify_payment_record(payment, actor=request.user)
             if sheger_result.get("verified") is True:
-                payment.verified_by = Payment.VerifiedBy.SHEGER_API
-                if order:
-                    _confirm_order_payment(order, payment, note="Auto-verified by Sheger API")
-                elif course:
-                    _confirm_course_enrollment(course, request.user, payment, note="Auto-verified by Sheger API")
-
                 return Response({
                     "status": "COMPLETED",
                     "verified": True,
                     "payment_id": str(payment.id),
-                    "message": "Payment verified automatically via Sheger API! Your order is confirmed.",
+                    "message": "Payment verified automatically via ShegerPay! Your order is confirmed.",
                 }, status=status.HTTP_200_OK)
 
-        # Notify student and staff of submission
+        # Notify student of submission
         Notification.objects.create(
             user=request.user,
             title="Payment Submitted for Review",
-            body=f"Your transaction reference '{transaction_id}' was received. Our team will verify it shortly.",
+            body=f"Your payment proof '{transaction_id}' was received. Our team will verify it shortly.",
         )
 
         return Response({
@@ -517,6 +522,7 @@ class SubmitManualPaymentView(APIView):
             "payment_id": str(payment.id),
             "message": "Your transfer reference was submitted successfully and is pending administrator review.",
         }, status=status.HTTP_200_OK)
+
 
 
 class ChapaVerifyView(APIView):
@@ -835,7 +841,12 @@ class AdminManualPaymentsView(APIView):
             student = p.user
             receipt_url = None
             if p.manual_receipt_image:
-                receipt_url = request.build_absolute_uri(p.manual_receipt_image.url)
+                try:
+                    receipt_url = p.manual_receipt_image.url
+                    if not receipt_url.startswith("http"):
+                        receipt_url = request.build_absolute_uri(receipt_url)
+                except Exception:
+                    receipt_url = None
 
             item_title = "Lesson Booking"
             if p.course:
@@ -852,7 +863,7 @@ class AdminManualPaymentsView(APIView):
                 "currency": p.currency,
                 "status": p.status,
                 "payment_method": p.payment_method,
-                "bank_name": p.bank_name,
+                "bank_name": p.bank_name or "Bank Transfer",
                 "manual_transaction_id": p.manual_transaction_id or "",
                 "manual_receipt_image": receipt_url,
                 "verified_by": p.verified_by,
@@ -934,3 +945,85 @@ class AdminManualPaymentRejectView(APIView):
             "payment_id": str(payment.id),
             "status": "FAILED",
         }, status=status.HTTP_200_OK)
+
+
+class AdminShegerVerifyPaymentView(APIView):
+    """
+    Triggers automated verification of a payment using the ShegerPay API.
+    Can verify by receipt screenshot OCR (/verify-image) or transaction reference (/verify).
+    """
+    permission_classes = [IsAdminUserPermission]
+
+    def post(self, request, payment_id, *args, **kwargs):
+        try:
+            payment = Payment.objects.get(id=payment_id)
+        except Payment.DoesNotExist:
+            return Response({"error": "Payment not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if payment.status == Payment.Status.COMPLETED:
+            return Response({
+                "message": "Payment is already completed.",
+                "verified": True,
+                "status": "COMPLETED",
+                "payment_id": str(payment.id),
+            }, status=status.HTTP_200_OK)
+
+        result = ShegerService.verify_payment_record(payment, actor=request.user)
+        return Response(result, status=status.HTTP_200_OK)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class ShegerWebhookView(APIView):
+    """
+    Receives real-time payment.verified webhook notifications from ShegerPay.
+    Verifies HMAC-SHA256 signature when secret is configured.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        payload_bytes = request.body
+        sig_header = request.headers.get("X-ShegerPay-Signature", "")
+
+        webhook_secret = getattr(settings, "SHEGERPAY_WEBHOOK_SECRET", "").strip()
+        if webhook_secret and sig_header:
+            import hmac
+            import hashlib
+            expected = hmac.new(webhook_secret.encode(), payload_bytes, hashlib.sha256).hexdigest()
+            provided = sig_header.replace("sha256=", "")
+            if not hmac.compare_digest(expected, provided):
+                logger.warning("ShegerPay webhook HMAC signature mismatch.")
+                return Response({"error": "Invalid signature"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            payload = json.loads(payload_bytes.decode("utf-8"))
+        except Exception:
+            return Response({"error": "Invalid JSON"}, status=status.HTTP_400_BAD_REQUEST)
+
+        event_type = payload.get("event")
+        data = payload.get("data", {})
+        logger.info(f"ShegerPay webhook event received: {event_type}")
+
+        if event_type == "payment.verified":
+            tx_id = data.get("transaction_id")
+            ref_id = data.get("reference_id")
+
+            payment = None
+            if tx_id:
+                payment = Payment.objects.filter(manual_transaction_id=tx_id).first()
+            if not payment and ref_id:
+                payment = Payment.objects.filter(tx_ref=ref_id).first()
+
+            if payment and payment.status != Payment.Status.COMPLETED:
+                note = f"Verified via ShegerPay webhook (Tx: {tx_id or ref_id})"
+                payment.verified_by = Payment.VerifiedBy.SHEGER_API
+                if payment.order:
+                    _confirm_order_payment(payment.order, payment, note=note)
+                elif payment.course and payment.user:
+                    _confirm_course_enrollment(payment.course, payment.user, payment, note=note)
+                else:
+                    payment.status = Payment.Status.COMPLETED
+                    payment.admin_note = note
+                    payment.save(update_fields=["status", "verified_by", "admin_note", "updated_at"])
+
+        return Response({"status": "received"}, status=status.HTTP_200_OK)
+
