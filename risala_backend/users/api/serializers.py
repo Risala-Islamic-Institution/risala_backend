@@ -606,6 +606,8 @@ from risala_backend.users.models import TimeSlot
 
 
 class TimeSlotSerializer(serializers.ModelSerializer):
+    booked_by_user_id = serializers.SerializerMethodField()
+
     class Meta:
         model = TimeSlot
         fields = [
@@ -616,11 +618,21 @@ class TimeSlotSerializer(serializers.ModelSerializer):
             "is_booked",
             "allowed_booking_type",
             "booking",
+            "booked_by_user_id",
             "batch_id",
             "batch_start_date",
             "batch_end_date",
         ]
-        read_only_fields = ["id", "is_booked", "booking"]
+        read_only_fields = ["id", "is_booked", "booking", "booked_by_user_id"]
+
+    def get_booked_by_user_id(self, obj):
+        if obj.booking_id:
+            try:
+                if obj.booking and obj.booking.student and obj.booking.student.user_id:
+                    return str(obj.booking.student.user_id)
+            except Exception:
+                pass
+        return None
 
 class RangeBookingRequestSerializer(serializers.Serializer):
     """Serializer for requesting a range booking from existing time slots."""
