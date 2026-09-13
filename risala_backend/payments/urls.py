@@ -8,6 +8,10 @@ from risala_backend.payments.views import (
     ChapaWebhookView,
     SubmitManualPaymentView,
     CancelOrRefundOrderView,
+    AdminPaymentConfigView,
+    AdminManualPaymentsView,
+    AdminManualPaymentApproveView,
+    AdminManualPaymentRejectView,
 )
 
 app_name = "payments"
@@ -33,4 +37,10 @@ urlpatterns = [
 
     # Order cancellation & refund
     path("cancel-order/", CancelOrRefundOrderView.as_view(), name="cancel_order"),
+
+    # Admin App Endpoints (Mobile Admin Dashboard)
+    path("admin/config/", AdminPaymentConfigView.as_view(), name="admin_config"),
+    path("admin/manual-payments/", AdminManualPaymentsView.as_view(), name="admin_manual_payments"),
+    path("admin/manual-payments/<str:payment_id>/approve/", AdminManualPaymentApproveView.as_view(), name="admin_approve_payment"),
+    path("admin/manual-payments/<str:payment_id>/reject/", AdminManualPaymentRejectView.as_view(), name="admin_reject_payment"),
 ]

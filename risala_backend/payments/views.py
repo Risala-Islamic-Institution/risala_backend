@@ -1,3 +1,4 @@
+import json
 import logging
 import uuid
 from decimal import Decimal
@@ -728,4 +729,208 @@ class CancelOrRefundOrderView(APIView):
             "message": "Order cancelled successfully.",
             "refund_issued": refund_issued,
             "status": "CANCELLED",
+        }, status=status.HTTP_200_OK)
+
+
+class IsAdminUserPermission(permissions.BasePermission):
+    """
+    Ensures user is staff, superuser, or has the ADMIN role.
+    """
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        return bool(
+            getattr(request.user, "is_staff", False)
+            or getattr(request.user, "is_superuser", False)
+            or (hasattr(request.user, "has_role") and request.user.has_role("ADMIN"))
+        )
+
+
+class AdminPaymentConfigView(APIView):
+    """
+    GET: Retrieve full gateway toggles and credentials (admin only).
+    PATCH: Update toggles, verification mode, accounts, keys in real time.
+    """
+    permission_classes = [IsAdminUserPermission]
+
+    def get(self, request, *args, **kwargs):
+        cfg = PaymentGatewayConfig.get_solo()
+        return Response({
+            "stripe_enabled": cfg.stripe_enabled,
+            "chapa_enabled": cfg.chapa_enabled,
+            "manual_bank_enabled": cfg.manual_bank_enabled,
+            "manual_verification_mode": cfg.manual_verification_mode,
+            "chapa_public_key": cfg.chapa_public_key,
+            "chapa_secret_key": cfg.chapa_secret_key,
+            "chapa_webhook_secret": cfg.chapa_webhook_secret,
+            "sheger_api_key": cfg.sheger_api_key,
+            "sheger_api_url": cfg.sheger_api_url,
+            "bank_accounts": cfg.bank_accounts,
+            "manual_payment_instructions": cfg.manual_payment_instructions,
+        }, status=status.HTTP_200_OK)
+
+    def patch(self, request, *args, **kwargs):
+        cfg = PaymentGatewayConfig.get_solo()
+        data = request.data
+
+        if "stripe_enabled" in data:
+            cfg.stripe_enabled = bool(data["stripe_enabled"])
+        if "chapa_enabled" in data:
+            cfg.chapa_enabled = bool(data["chapa_enabled"])
+        if "manual_bank_enabled" in data:
+            cfg.manual_bank_enabled = bool(data["manual_bank_enabled"])
+        if "manual_verification_mode" in data:
+            mode = data["manual_verification_mode"]
+            if mode in [PaymentGatewayConfig.VerificationMode.MANUAL_ADMIN,
+                        PaymentGatewayConfig.VerificationMode.SHEGER_API]:
+                cfg.manual_verification_mode = mode
+        if "chapa_public_key" in data:
+            cfg.chapa_public_key = str(data["chapa_public_key"]).strip()
+        if "chapa_secret_key" in data:
+            cfg.chapa_secret_key = str(data["chapa_secret_key"]).strip()
+        if "chapa_webhook_secret" in data:
+            cfg.chapa_webhook_secret = str(data["chapa_webhook_secret"]).strip()
+        if "sheger_api_key" in data:
+            cfg.sheger_api_key = str(data["sheger_api_key"]).strip()
+        if "sheger_api_url" in data:
+            cfg.sheger_api_url = str(data["sheger_api_url"]).strip()
+        if "bank_accounts" in data and isinstance(data["bank_accounts"], list):
+            cfg.bank_accounts = data["bank_accounts"]
+        if "manual_payment_instructions" in data:
+            cfg.manual_payment_instructions = str(data["manual_payment_instructions"])
+
+        cfg.save()
+        return Response({
+            "message": "Payment gateway configuration updated successfully.",
+            "config": {
+                "stripe_enabled": cfg.stripe_enabled,
+                "chapa_enabled": cfg.chapa_enabled,
+                "manual_bank_enabled": cfg.manual_bank_enabled,
+                "manual_verification_mode": cfg.manual_verification_mode,
+                "chapa_public_key": cfg.chapa_public_key,
+                "chapa_secret_key": cfg.chapa_secret_key,
+                "sheger_api_key": cfg.sheger_api_key,
+                "sheger_api_url": cfg.sheger_api_url,
+                "bank_accounts": cfg.bank_accounts,
+                "manual_payment_instructions": cfg.manual_payment_instructions,
+            }
+        }, status=status.HTTP_200_OK)
+
+
+class AdminManualPaymentsView(APIView):
+    """
+    Lists payments for admin review.
+    Query params: ?status=UNDER_REVIEW (default) or ?status=ALL
+    """
+    permission_classes = [IsAdminUserPermission]
+
+    def get(self, request, *args, **kwargs):
+        status_filter = request.query_params.get("status", "UNDER_REVIEW").upper()
+        qs = Payment.objects.select_related("user", "order", "course").order_by("-created_at")
+        if status_filter != "ALL":
+            qs = qs.filter(status=status_filter)
+
+        results = []
+        for p in qs[:50]:
+            student = p.user
+            receipt_url = None
+            if p.manual_receipt_image:
+                receipt_url = request.build_absolute_uri(p.manual_receipt_image.url)
+
+            item_title = "Lesson Booking"
+            if p.course:
+                item_title = f"Course: {p.course.title}"
+            elif p.order:
+                session_count = p.order.bookings.count()
+                teacher_name = getattr(getattr(p.order.teacher, "user", None), "full_name", "")
+                item_title = f"{session_count} Sessions with {teacher_name or 'Ustaz'}"
+
+            results.append({
+                "id": str(p.id),
+                "tx_ref": p.tx_ref or "",
+                "amount": str(p.amount),
+                "currency": p.currency,
+                "status": p.status,
+                "payment_method": p.payment_method,
+                "bank_name": p.bank_name,
+                "manual_transaction_id": p.manual_transaction_id or "",
+                "manual_receipt_image": receipt_url,
+                "verified_by": p.verified_by,
+                "admin_note": p.admin_note or "",
+                "item_title": item_title,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+                "student": {
+                    "id": student.id if student else None,
+                    "name": (student.full_name or student.username) if student else "Unknown",
+                    "email": student.email if student else "",
+                }
+            })
+
+        return Response({"payments": results, "count": len(results)}, status=status.HTTP_200_OK)
+
+
+class AdminManualPaymentApproveView(APIView):
+    """
+    Approves a manual bank transfer / Telebirr payment.
+    Activates the order/course atomically.
+    """
+    permission_classes = [IsAdminUserPermission]
+
+    def post(self, request, payment_id, *args, **kwargs):
+        try:
+            payment = Payment.objects.get(id=payment_id)
+        except Payment.DoesNotExist:
+            return Response({"error": "Payment not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if payment.status == Payment.Status.COMPLETED:
+            return Response({"message": "Payment is already completed."}, status=status.HTTP_200_OK)
+
+        note = request.data.get("note", f"Approved by admin {request.user.username} via mobile app")
+        payment.verified_by = Payment.VerifiedBy.MANUAL_ADMIN
+        payment.admin_note = note
+
+        if payment.order:
+            _confirm_order_payment(payment.order, payment, note=note)
+        elif payment.course and payment.user:
+            _confirm_course_enrollment(payment.course, payment.user, payment, note=note)
+        else:
+            payment.status = Payment.Status.COMPLETED
+            payment.save(update_fields=["status", "verified_by", "admin_note", "updated_at"])
+
+        return Response({
+            "message": "Payment approved and activated successfully.",
+            "payment_id": str(payment.id),
+            "status": "COMPLETED",
+        }, status=status.HTTP_200_OK)
+
+
+class AdminManualPaymentRejectView(APIView):
+    """
+    Rejects a manual payment and notifies student.
+    """
+    permission_classes = [IsAdminUserPermission]
+
+    def post(self, request, payment_id, *args, **kwargs):
+        try:
+            payment = Payment.objects.get(id=payment_id)
+        except Payment.DoesNotExist:
+            return Response({"error": "Payment not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        note = request.data.get("note", "Payment could not be verified.")
+        payment.status = Payment.Status.FAILED
+        payment.admin_note = note
+        payment.save(update_fields=["status", "admin_note", "updated_at"])
+
+        # Send notification to student
+        if payment.user:
+            Notification.objects.create(
+                user=payment.user,
+                title="Payment Reference Rejected",
+                body=f"Your payment reference ({payment.manual_transaction_id or payment.tx_ref}) could not be verified: {note}. Please check with your bank or try another payment method.",
+            )
+
+        return Response({
+            "message": "Payment rejected.",
+            "payment_id": str(payment.id),
+            "status": "FAILED",
         }, status=status.HTTP_200_OK)
