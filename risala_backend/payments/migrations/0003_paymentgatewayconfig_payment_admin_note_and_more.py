@@ -5,6 +5,39 @@ from django.conf import settings
 from django.db import migrations, models
 
 
+def make_order_nullable_and_non_unique(apps, schema_editor):
+    if schema_editor.connection.vendor == 'postgresql':
+        with schema_editor.connection.cursor() as cursor:
+            cursor.execute("ALTER TABLE payments_payment ALTER COLUMN order_id DROP NOT NULL;")
+            cursor.execute("""
+                DO $$
+                DECLARE
+                    r RECORD;
+                BEGIN
+                    FOR r IN (
+                        SELECT conname 
+                        FROM pg_constraint 
+                        WHERE conrelid = 'payments_payment'::regclass 
+                          AND contype = 'u' 
+                          AND conkey = ARRAY[
+                              (SELECT attnum FROM pg_attribute WHERE attrelid = 'payments_payment'::regclass AND attname = 'order_id')
+                          ]
+                    ) LOOP
+                        EXECUTE 'ALTER TABLE payments_payment DROP CONSTRAINT IF EXISTS ' || quote_ident(r.conname);
+                    END LOOP;
+                END $$;
+            """)
+            cursor.execute("DROP INDEX IF EXISTS payments_payment_order_id_key;")
+            cursor.execute("DROP INDEX IF EXISTS payments_payment_order_id_uniq;")
+
+
+def reverse_order_nullable_and_non_unique(apps, schema_editor):
+    if schema_editor.connection.vendor == 'postgresql':
+        with schema_editor.connection.cursor() as cursor:
+            cursor.execute("ALTER TABLE payments_payment ALTER COLUMN order_id SET NOT NULL;")
+            cursor.execute("ALTER TABLE payments_payment ADD CONSTRAINT payments_payment_order_id_key UNIQUE (order_id);")
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -88,10 +121,20 @@ class Migration(migrations.Migration):
             name='verified_by',
             field=models.CharField(choices=[('WEBHOOK', 'Automated Webhook'), ('MANUAL_ADMIN', 'Manual Admin Approval'), ('SHEGER_API', 'Sheger API'), ('AUTO_BYPASS', 'Free / Auto Bypass')], default='WEBHOOK', help_text='How this payment was verified.', max_length=20),
         ),
-        migrations.AlterField(
-            model_name='payment',
-            name='order',
-            field=models.ForeignKey(blank=True, help_text='The order this payment is for (if booking sessions).', null=True, on_delete=django.db.models.deletion.CASCADE, related_name='payments', to='users.bookingorder'),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunPython(
+                    make_order_nullable_and_non_unique,
+                    reverse_code=reverse_order_nullable_and_non_unique,
+                ),
+            ],
+            state_operations=[
+                migrations.AlterField(
+                    model_name='payment',
+                    name='order',
+                    field=models.ForeignKey(blank=True, help_text='The order this payment is for (if booking sessions).', null=True, on_delete=django.db.models.deletion.CASCADE, related_name='payments', to='users.bookingorder'),
+                ),
+            ],
         ),
         migrations.AlterField(
             model_name='payment',
