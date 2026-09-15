@@ -257,6 +257,23 @@ class Payment(TimeStampedModel, UUIDModel):
         default="",
         help_text=_("Staff notes for manual approval or rejection.")
     )
+    # ShegerPay Automated Verification telemetry
+    sheger_status = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+        help_text=_("Status returned by ShegerPay (e.g. verified, failed, invalid_input, network_error).")
+    )
+    sheger_reason = models.TextField(
+        blank=True,
+        default="",
+        help_text=_("Detailed reason or error message returned by ShegerPay automated check.")
+    )
+    sheger_response = models.JSONField(
+        blank=True,
+        default=dict,
+        help_text=_("Raw JSON response from ShegerPay API.")
+    )
     
     class Meta:
         ordering = ["-created_at"]

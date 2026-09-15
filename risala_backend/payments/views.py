@@ -498,18 +498,66 @@ class SubmitManualPaymentView(APIView):
                 verified_by=Payment.VerifiedBy.MANUAL_ADMIN,
             )
 
-        # Check if automated Sheger API verification is configured
-        if config.manual_verification_mode == PaymentGatewayConfig.VerificationMode.SHEGER_API:
+        # Check if automated Sheger API verification is available
+        sheger_api_key = ShegerService.get_api_key()
+        has_sheger = bool(sheger_api_key) or config.manual_verification_mode == PaymentGatewayConfig.VerificationMode.SHEGER_API
+
+        if has_sheger:
             sheger_result = ShegerService.verify_payment_record(payment, actor=request.user)
             if sheger_result.get("verified") is True:
+                # Notify student of immediate confirmation
+                Notification.objects.create(
+                    user=request.user,
+                    title="Payment Verified Automatically! 🎉",
+                    body=f"Your transfer proof '{transaction_id or 'slip'}' was successfully verified via ShegerPay banking rails. Your booking/course is active!",
+                )
                 return Response({
                     "status": "COMPLETED",
                     "verified": True,
                     "payment_id": str(payment.id),
+                    "sheger_status": "verified",
                     "message": "Payment verified automatically via ShegerPay! Your order is confirmed.",
                 }, status=status.HTTP_200_OK)
+            else:
+                fail_reason = (
+                    sheger_result.get("reason")
+                    or sheger_result.get("error")
+                    or "Transaction could not be verified on banking rails."
+                )
+                sheger_status_code = sheger_result.get("status") or "failed"
 
-        # Notify student of submission
+                # 1. Notify the student immediately with the specific failure reason
+                Notification.objects.create(
+                    user=request.user,
+                    title="⚠️ Payment Verification Alert",
+                    body=f"ShegerPay automated check could not verify your transfer proof '{transaction_id or 'slip'}': {fail_reason}. Please verify your transaction reference or slip and re-submit.",
+                )
+
+                # 2. Notify staff/admin so they can inspect what went wrong
+                try:
+                    from django.contrib.auth import get_user_model
+                    User = get_user_model()
+                    staff_users = User.objects.filter(is_staff=True)
+                    student_name = request.user.full_name or request.user.username
+                    for staff in staff_users[:5]:
+                        Notification.objects.create(
+                            user=staff,
+                            title="⚠️ ShegerPay Auto-Verification Failed",
+                            body=f"Payment of {payment.amount} {payment.currency.upper()} by {student_name} ({payment.bank_name}) failed ShegerPay check: {fail_reason}.",
+                        )
+                except Exception as e:
+                    logger.warning(f"Could not dispatch staff notifications: {e}")
+
+                return Response({
+                    "status": "UNDER_REVIEW",
+                    "verified": False,
+                    "payment_id": str(payment.id),
+                    "sheger_status": sheger_status_code,
+                    "sheger_reason": fail_reason,
+                    "message": f"ShegerPay automated check was unable to verify this transaction: {fail_reason}. It has been forwarded for admin review.",
+                }, status=status.HTTP_200_OK)
+
+        # Fallback if ShegerPay is not configured
         Notification.objects.create(
             user=request.user,
             title="Payment Submitted for Review",
@@ -868,6 +916,8 @@ class AdminManualPaymentsView(APIView):
                 "manual_receipt_image": receipt_url,
                 "verified_by": p.verified_by,
                 "admin_note": p.admin_note or "",
+                "sheger_status": p.sheger_status or "",
+                "sheger_reason": p.sheger_reason or "",
                 "item_title": item_title,
                 "created_at": p.created_at.isoformat() if p.created_at else None,
                 "student": {
@@ -972,6 +1022,43 @@ class AdminShegerVerifyPaymentView(APIView):
         return Response(result, status=status.HTTP_200_OK)
 
 
+class AdminRequestResubmitPaymentView(APIView):
+    """
+    Staff prompts the student to re-submit their payment receipt/reference.
+    Dispatches immediate alert notification to the student with clear guidance.
+    """
+    permission_classes = [IsAdminUserPermission]
+
+    def post(self, request, payment_id, *args, **kwargs):
+        try:
+            payment = Payment.objects.get(id=payment_id)
+        except Payment.DoesNotExist:
+            return Response({"error": "Payment not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        reason = request.data.get("reason", "").strip()
+        if not reason:
+            reason = payment.sheger_reason or "Payment proof could not be verified on banking rails."
+
+        note = f"Re-submission requested: {reason}"
+        payment.admin_note = note
+        payment.sheger_status = "resubmit_requested"
+        payment.save(update_fields=["admin_note", "sheger_status", "updated_at"])
+
+        if payment.user:
+            Notification.objects.create(
+                user=payment.user,
+                title="⚠️ Payment Re-submission Requested",
+                body=f"Action Required: We could not verify your payment proof ({payment.manual_transaction_id or 'receipt'}). Reason: {reason}. Please re-submit with a valid transaction reference or clear screenshot.",
+            )
+
+        return Response({
+            "message": "Re-submission request dispatched to student.",
+            "payment_id": str(payment.id),
+            "status": payment.status,
+            "sheger_status": "resubmit_requested",
+        }, status=status.HTTP_200_OK)
+
+
 @method_decorator(csrf_exempt, name="dispatch")
 class ShegerWebhookView(APIView):
     """
@@ -984,7 +1071,11 @@ class ShegerWebhookView(APIView):
         payload_bytes = request.body
         sig_header = request.headers.get("X-ShegerPay-Signature", "")
 
-        webhook_secret = getattr(settings, "SHEGERPAY_WEBHOOK_SECRET", "").strip()
+        import os
+        webhook_secret = (
+            os.environ.get("SHEGERPAY_WEBHOOK_SECRET", "").strip()
+            or getattr(settings, "SHEGERPAY_WEBHOOK_SECRET", "").strip()
+        )
         if webhook_secret and sig_header:
             import hmac
             import hashlib

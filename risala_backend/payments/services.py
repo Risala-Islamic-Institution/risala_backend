@@ -205,14 +205,23 @@ class ShegerService:
 
     @classmethod
     def get_api_key(cls) -> str:
-        config = PaymentGatewayConfig.get_solo()
-        if config.sheger_api_key and config.sheger_api_key.strip():
-            return config.sheger_api_key.strip()
+        import os
+        # 1. Environment variable (Render Environment Variables / System)
+        env_key = os.environ.get("SHEGERPAY_API_KEY", "").strip()
+        if env_key:
+            return env_key
+        # 2. Django settings
         settings_key = getattr(settings, "SHEGERPAY_API_KEY", "")
         if settings_key and str(settings_key).strip():
             return str(settings_key).strip()
-        import os
-        return os.environ.get("SHEGERPAY_API_KEY", "").strip()
+        # 3. Dynamic database configuration (PaymentGatewayConfig)
+        try:
+            config = PaymentGatewayConfig.get_solo()
+            if config.sheger_api_key and config.sheger_api_key.strip():
+                return config.sheger_api_key.strip()
+        except Exception:
+            pass
+        return ""
 
     @classmethod
     def get_base_url(cls) -> str:
@@ -449,8 +458,15 @@ class ShegerService:
                 expected_sender_name=sender_name,
             )
 
+        # Record ShegerPay telemetry on payment model
+        is_verified = result.get("verified") is True
+        payment.sheger_status = "verified" if is_verified else (result.get("status") or "failed")
+        payment.sheger_reason = result.get("reason") or result.get("error") or ("Verified by ShegerPay" if is_verified else "Verification failed")
+        if isinstance(result.get("raw"), dict):
+            payment.sheger_response = result.get("raw")
+
         # 3. If verified, update the payment model and activate associated orders atomically
-        if result.get("verified") is True:
+        if is_verified:
             from risala_backend.payments.models import Payment
             from risala_backend.payments.views import _confirm_order_payment, _confirm_course_enrollment
 
@@ -467,11 +483,13 @@ class ShegerService:
             else:
                 payment.status = Payment.Status.COMPLETED
                 payment.admin_note = note
-                payment.save(update_fields=["status", "verified_by", "admin_note", "manual_transaction_id", "updated_at"])
+                payment.save(update_fields=["status", "verified_by", "admin_note", "manual_transaction_id", "sheger_status", "sheger_reason", "sheger_response", "updated_at"])
 
             result["status"] = "COMPLETED"
             result["payment_id"] = str(payment.id)
             result["message"] = "Payment successfully verified by ShegerPay! Linked sessions/course confirmed."
+        else:
+            payment.save(update_fields=["sheger_status", "sheger_reason", "sheger_response", "updated_at"])
 
         return result
 

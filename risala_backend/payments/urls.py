@@ -13,6 +13,7 @@ from risala_backend.payments.views import (
     AdminManualPaymentApproveView,
     AdminManualPaymentRejectView,
     AdminShegerVerifyPaymentView,
+    AdminRequestResubmitPaymentView,
     ShegerWebhookView,
 )
 
@@ -48,5 +49,6 @@ urlpatterns = [
     path("admin/manual-payments/", AdminManualPaymentsView.as_view(), name="admin_manual_payments"),
     path("admin/manual-payments/<str:payment_id>/approve/", AdminManualPaymentApproveView.as_view(), name="admin_approve_payment"),
     path("admin/manual-payments/<str:payment_id>/reject/", AdminManualPaymentRejectView.as_view(), name="admin_reject_payment"),
+    path("admin/manual-payments/<str:payment_id>/request-resubmit/", AdminRequestResubmitPaymentView.as_view(), name="admin_request_resubmit_payment"),
     path("admin/manual-payments/<str:payment_id>/sheger-verify/", AdminShegerVerifyPaymentView.as_view(), name="admin_sheger_verify_payment"),
 ]
