@@ -23,12 +23,23 @@ SECRET_KEY = env("DJANGO_SECRET_KEY", default="django-insecure-default-key-for-p
 # localhost/127.0.0.1 so platform health checks don't 400 with DisallowedHost.
 ALLOWED_HOSTS = env.list(
     "DJANGO_ALLOWED_HOSTS",
-    default=["risala.app.aletcloud.com", "localhost", "127.0.0.1"],
+    default=[
+        "risala-5vs3.onrender.com",
+        ".onrender.com",
+        "risala.app.aletcloud.com",
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+    ],
 )
 # Browsers need the https origin trusted for CSRF-protected POSTs (admin login).
 CSRF_TRUSTED_ORIGINS = env.list(
     "DJANGO_CSRF_TRUSTED_ORIGINS",
-    default=["https://risala.app.aletcloud.com"],
+    default=[
+        "https://risala-5vs3.onrender.com",
+        "https://*.onrender.com",
+        "https://risala.app.aletcloud.com",
+    ],
 )
 
 # DATABASES

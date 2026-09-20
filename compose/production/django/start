@@ -4,6 +4,8 @@ set -o errexit
 set -o pipefail
 set -o nounset
 
+export DJANGO_SETTINGS_MODULE="${DJANGO_SETTINGS_MODULE:-config.settings.production}"
+
 
 python /app/manage.py migrate --noinput
 
