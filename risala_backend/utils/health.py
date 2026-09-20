@@ -92,3 +92,13 @@ class AuthRateThrottle(AnonRateThrottle):
     Strict rate-limiter for authentication endpoints to prevent brute-force attacks.
     """
     scope = "auth"
+
+
+def trigger_sentry_test_error(request):
+    """
+    Test endpoint to verify real-time Sentry crash reporting.
+    Raises an intentional test exception.
+    """
+    logger.info("Triggering intentional Sentry test exception...")
+    raise ZeroDivisionError("Sentry test verification exception from Risala Backend!")
+

@@ -412,3 +412,26 @@ WEBPACK_LOADER = {
 }
 # Your stuff...
 # ------------------------------------------------------------------------------
+# Sentry Crash & Performance Telemetry (Activates whenever SENTRY_DSN is provided)
+SENTRY_DSN = env("SENTRY_DSN", default="")
+if SENTRY_DSN and (SENTRY_DSN.startswith("http://") or SENTRY_DSN.startswith("https://")):
+    import logging
+    import sentry_sdk
+    from sentry_sdk.integrations.django import DjangoIntegration
+    from sentry_sdk.integrations.logging import LoggingIntegration
+
+    sentry_logging = LoggingIntegration(
+        level=logging.INFO,
+        event_level=logging.ERROR,
+    )
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        integrations=[
+            sentry_logging,
+            DjangoIntegration(),
+        ],
+        environment=env("SENTRY_ENVIRONMENT", default="production"),
+        traces_sample_rate=env.float("SENTRY_TRACES_SAMPLE_RATE", default=1.0),
+        send_default_pii=True,
+    )
+

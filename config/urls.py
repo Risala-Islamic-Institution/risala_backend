@@ -10,7 +10,11 @@ from drf_spectacular.views import SpectacularAPIView
 from drf_spectacular.views import SpectacularSwaggerView
 from rest_framework.authtoken.views import obtain_auth_token
 
-from risala_backend.utils.health import AppVersionConfigView, HealthCheckView
+from risala_backend.utils.health import (
+    AppVersionConfigView,
+    HealthCheckView,
+    trigger_sentry_test_error,
+)
 
 
 urlpatterns = [
@@ -44,6 +48,7 @@ api_v1_urlpatterns = [
     path("", include("config.api_router")),
     path("healthz/", HealthCheckView.as_view(), name="healthz-v1"),
     path("app/version/", AppVersionConfigView.as_view(), name="app-version-v1"),
+    path("sentry-debug/", trigger_sentry_test_error, name="sentry-debug-v1"),
     path("auth-token/", obtain_auth_token, name="obtain_auth_token_v1"),
     path("auth/", include("dj_rest_auth.urls")),
     path("auth/registration/", include("dj_rest_auth.registration.urls")),
@@ -57,6 +62,8 @@ api_v1_urlpatterns = [
 urlpatterns += [
     # Top-level Health Check Probe (Traefik / Cloudflare / Uptime monitors)
     path("healthz/", HealthCheckView.as_view(), name="healthz"),
+    # Sentry Test Endpoint
+    path("sentry-debug/", trigger_sentry_test_error, name="sentry-debug"),
 
     # Explicit Version 1 API namespace
     path("api/v1/", include((api_v1_urlpatterns, "v1"))),
@@ -65,6 +72,7 @@ urlpatterns += [
     path("api/", include("config.api_router")),
     path("api/healthz/", HealthCheckView.as_view(), name="healthz-legacy"),
     path("api/app/version/", AppVersionConfigView.as_view(), name="app-version"),
+    path("api/sentry-debug/", trigger_sentry_test_error, name="sentry-debug-legacy"),
     path("api/auth-token/", obtain_auth_token, name="obtain_auth_token"),
     path("api/auth/", include("dj_rest_auth.urls")),
     path("api/auth/registration/", include("dj_rest_auth.registration.urls")),
