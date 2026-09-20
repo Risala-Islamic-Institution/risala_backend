@@ -360,7 +360,33 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_VERSIONING_CLASS": "rest_framework.versioning.URLPathVersioning",
+    "DEFAULT_VERSION": "v1",
+    "ALLOWED_VERSIONS": ["v1"],
+    "VERSION_PARAM": "version",
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": env("DJANGO_ANON_THROTTLE_RATE", default="120/minute"),
+        "user": env("DJANGO_USER_THROTTLE_RATE", default="600/minute"),
+        "auth": env("DJANGO_AUTH_THROTTLE_RATE", default="10/minute"),
+    },
 }
+
+# Mobile Application Remote Versioning & Kill-Switch Configuration
+MOBILE_APP_LATEST_VERSION = env("MOBILE_APP_LATEST_VERSION", default="1.0.0")
+MOBILE_APP_MIN_VERSION = env("MOBILE_APP_MIN_VERSION", default="1.0.0")
+MOBILE_APP_RELEASE_NOTES = env(
+    "MOBILE_APP_RELEASE_NOTES",
+    default="Official v1.0.0 release of Risala Islamic Institution Mobile Platform.",
+)
+MOBILE_APP_FORCE_UPDATE = env.bool("MOBILE_APP_FORCE_UPDATE", default=False)
+MOBILE_APP_DOWNLOAD_URL = env(
+    "MOBILE_APP_DOWNLOAD_URL",
+    default="https://play.google.com/store/apps/details?id=com.example.risala_mobile",
+)
 
 # django-cors-headers - https://github.com/adamchainz/django-cors-headers#setup
 CORS_URLS_REGEX = r"^/api/.*$"

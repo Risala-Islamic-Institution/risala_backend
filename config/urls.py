@@ -10,6 +10,8 @@ from drf_spectacular.views import SpectacularAPIView
 from drf_spectacular.views import SpectacularSwaggerView
 from rest_framework.authtoken.views import obtain_auth_token
 
+from risala_backend.utils.health import AppVersionConfigView, HealthCheckView
+
 
 urlpatterns = [
     path("", TemplateView.as_view(template_name="pages/home.html"), name="home"),
@@ -37,22 +39,52 @@ if settings.DEBUG:
     urlpatterns += staticfiles_urlpatterns()
 
 
+# ── V1 API URL PATTERNS ──────────────────────────────────────────────────────
+api_v1_urlpatterns = [
+    path("", include("config.api_router")),
+    path("healthz/", HealthCheckView.as_view(), name="healthz-v1"),
+    path("app/version/", AppVersionConfigView.as_view(), name="app-version-v1"),
+    path("auth-token/", obtain_auth_token, name="obtain_auth_token_v1"),
+    path("auth/", include("dj_rest_auth.urls")),
+    path("auth/registration/", include("dj_rest_auth.registration.urls")),
+    path(
+        "payments/",
+        include("risala_backend.payments.urls", namespace="payments_v1"),
+    ),
+]
+
 # API URLS
 urlpatterns += [
-    # API base url
+    # Top-level Health Check Probe (Traefik / Cloudflare / Uptime monitors)
+    path("healthz/", HealthCheckView.as_view(), name="healthz"),
+
+    # Explicit Version 1 API namespace
+    path("api/v1/", include((api_v1_urlpatterns, "v1"))),
+
+    # Backward-Compatible Unversioned API (routes identically to v1)
     path("api/", include("config.api_router")),
-    # DRF auth token (legacy)
+    path("api/healthz/", HealthCheckView.as_view(), name="healthz-legacy"),
+    path("api/app/version/", AppVersionConfigView.as_view(), name="app-version"),
     path("api/auth-token/", obtain_auth_token, name="obtain_auth_token"),
-    # dj-rest-auth endpoints (Login, Logout, Password Reset, etc.)
     path("api/auth/", include("dj_rest_auth.urls")),
-    # dj-rest-auth registration (requires allauth)
     path("api/auth/registration/", include("dj_rest_auth.registration.urls")),
-    path("api/payments/", include("risala_backend.payments.urls", namespace="payments")),
+    path(
+        "api/payments/",
+        include("risala_backend.payments.urls", namespace="payments"),
+    ),
+
+    # OpenAPI Schema & Swagger Documentation
     path("api/schema/", SpectacularAPIView.as_view(), name="api-schema"),
     path(
         "api/docs/",
         SpectacularSwaggerView.as_view(url_name="api-schema"),
         name="api-docs",
+    ),
+    path("api/v1/schema/", SpectacularAPIView.as_view(), name="api-v1-schema"),
+    path(
+        "api/v1/docs/",
+        SpectacularSwaggerView.as_view(url_name="api-v1-schema"),
+        name="api-v1-docs",
     ),
 ]
 
