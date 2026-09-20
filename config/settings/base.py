@@ -2,9 +2,22 @@
 """Base settings to build other settings files upon."""
 
 import ssl
+import warnings
 from pathlib import Path
 
 import environ
+
+# Silence Django ASGI warning caused by WhiteNoise/file responses serving synchronous iterators
+warnings.filterwarnings(
+    "ignore",
+    message=r"StreamingHttpResponse must consume synchronous iterators.*",
+)
+# Silence dj-rest-auth deprecation warnings
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    module=r"dj_rest_auth.*",
+)
 
 BASE_DIR = Path(__file__).resolve(strict=True).parent.parent.parent
 # risala_backend/
