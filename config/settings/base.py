@@ -430,8 +430,10 @@ SENTRY_DSN = env("SENTRY_DSN", default="")
 if SENTRY_DSN and (SENTRY_DSN.startswith("http://") or SENTRY_DSN.startswith("https://")):
     import logging
     import sentry_sdk
+    from sentry_sdk.integrations.celery import CeleryIntegration
     from sentry_sdk.integrations.django import DjangoIntegration
     from sentry_sdk.integrations.logging import LoggingIntegration
+    from sentry_sdk.integrations.redis import RedisIntegration
 
     sentry_logging = LoggingIntegration(
         level=logging.INFO,
@@ -442,6 +444,8 @@ if SENTRY_DSN and (SENTRY_DSN.startswith("http://") or SENTRY_DSN.startswith("ht
         integrations=[
             sentry_logging,
             DjangoIntegration(),
+            CeleryIntegration(),
+            RedisIntegration(),
         ],
         environment=env("SENTRY_ENVIRONMENT", default="production"),
         traces_sample_rate=env.float("SENTRY_TRACES_SAMPLE_RATE", default=1.0),
