@@ -116,8 +116,7 @@ REST_AUTH = {
 
 # Silk Profiler (Deep SQL & Latency Profiling)
 # ------------------------------------------------------------------------------
-ENABLE_SILK = env.bool("ENABLE_SILK", default=False)
-if ENABLE_SILK:
+if ENABLE_SILK and "silk" not in INSTALLED_APPS:
     INSTALLED_APPS += ["silk"]
     MIDDLEWARE = ["silk.middleware.SilkyMiddleware", *MIDDLEWARE]
     SILKY_PYTHON_PROFILER = True

@@ -99,8 +99,13 @@ class AuthRateThrottle(AnonRateThrottle):
 def trigger_sentry_test_error(request):
     """
     Test endpoint to verify real-time Sentry crash reporting.
-    Raises an intentional test exception.
+    Explicitly captures a test telemetry event and raises an unhandled ZeroDivisionError.
     """
     logger.info("Triggering intentional Sentry test exception...")
+    try:
+        import sentry_sdk
+        sentry_sdk.capture_message("Risala Production Sentry Verification: /sentry-debug/ accessed", level="info")
+    except Exception as exc:
+        logger.warning("Could not send Sentry message: %s", exc)
     raise ZeroDivisionError("Sentry test verification exception from Risala Backend!")
 

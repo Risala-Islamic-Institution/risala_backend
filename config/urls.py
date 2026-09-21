@@ -90,13 +90,16 @@ urlpatterns += [
         SpectacularSwaggerView.as_view(url_name="api-v1-schema"),
         name="api-v1-docs",
     ),
+    # Sentry verification endpoint (triggers test exception to verify live Sentry alerts)
+    path("sentry-debug/", trigger_sentry_test_error, name="sentry-debug"),
 ]
 
-if settings.DEBUG:
-    # Sentry verification endpoint (active only during development)
+if "silk" in settings.INSTALLED_APPS:
     urlpatterns += [
-        path("sentry-debug/", trigger_sentry_test_error, name="sentry-debug"),
+        path("silk/", include("silk.urls", namespace="silk")),
     ]
+
+if settings.DEBUG:
     # This allows the error pages to be debugged during development, just visit
     # these url in browser to see how these error pages look like.
     urlpatterns += [
@@ -123,9 +126,4 @@ if settings.DEBUG:
         urlpatterns = [
             path("__debug__/", include(debug_toolbar.urls)),
             *urlpatterns,
-        ]
-
-    if "silk" in settings.INSTALLED_APPS:
-        urlpatterns += [
-            path("silk/", include("silk.urls", namespace="silk")),
         ]

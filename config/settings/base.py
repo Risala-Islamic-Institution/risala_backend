@@ -452,3 +452,14 @@ if SENTRY_DSN and (SENTRY_DSN.startswith("http://") or SENTRY_DSN.startswith("ht
         send_default_pii=True,
     )
 
+# Silk Profiler (Deep SQL & Latency Profiling)
+# ------------------------------------------------------------------------------
+ENABLE_SILK = env.bool("ENABLE_SILK", default=False)
+if ENABLE_SILK and "silk" not in INSTALLED_APPS:
+    INSTALLED_APPS += ["silk"]
+    MIDDLEWARE = ["silk.middleware.SilkyMiddleware", *MIDDLEWARE]
+    SILKY_PYTHON_PROFILER = True
+    SILKY_INTERCEPT_PERCENT = env.int("SILKY_INTERCEPT_PERCENT", default=50)
+    SILKY_AUTHENTICATION = True
+    SILKY_AUTHORISATION = True
+
