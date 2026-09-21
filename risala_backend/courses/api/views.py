@@ -3,7 +3,7 @@ from rest_framework.mixins import ListModelMixin, RetrieveModelMixin, CreateMode
 from rest_framework.viewsets import GenericViewSet
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 
 from risala_backend.courses.models import Course, CourseModule, Lesson, Enrollment
 from django.db.models import Q
@@ -27,8 +27,12 @@ from risala_backend.courses.models import LessonProgress, Certificate, QuizQuest
 
 class CourseViewSet(ListModelMixin, RetrieveModelMixin, CreateModelMixin, UpdateModelMixin, GenericViewSet):
     serializer_class = CourseSerializer
-    permission_classes = [IsAuthenticated]
     lookup_field = "slug"
+
+    def get_permissions(self):
+        if self.action in ("list", "retrieve"):
+            return [AllowAny()]
+        return [IsAuthenticated()]
 
     def get_queryset(self):
         user = self.request.user

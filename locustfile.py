@@ -185,7 +185,8 @@ class RisalaConcurrentBookingUser(HttpUser):
                     response.success()
                 else:
                     response.failure(f"Unhandled 400 error: {response.text[:120]}")
-            elif response.status_code in (401, 404):
+            elif response.status_code in (401, 403, 404):
+                # Expected when testing without student credentials
                 response.success()
             elif response.status_code >= 500:
                 ConcurrentBookingMetrics.unhandled_errors += 1
@@ -226,7 +227,8 @@ class RisalaConcurrentBookingUser(HttpUser):
                     response.success()
                 else:
                     response.failure(f"Unhandled bulk 400 error: {response.text[:120]}")
-            elif response.status_code in (401, 404):
+            elif response.status_code in (401, 403, 404):
+                # Expected when testing without student credentials
                 response.success()
             elif response.status_code >= 500:
                 ConcurrentBookingMetrics.unhandled_errors += 1
@@ -243,6 +245,17 @@ class RisalaStudentUser(HttpUser):
 
     def on_start(self):
         self.auth_token = os.getenv("TEST_AUTH_TOKEN", "")
+        username = os.getenv("STUDENT_USERNAME", "")
+        password = os.getenv("STUDENT_PASSWORD", "")
+        if not self.auth_token and username and password:
+            try:
+                res = self.client.post("/api/v1/auth/login/", json={"username": username, "password": password})
+                if res.status_code == 200:
+                    data = res.json()
+                    self.auth_token = data.get("key") or data.get("token") or ""
+            except Exception:
+                pass
+
         self.headers = {
             "Authorization": f"Token {self.auth_token}"
         } if self.auth_token else {}
@@ -251,7 +264,7 @@ class RisalaStudentUser(HttpUser):
     @task(3)
     def view_profile_and_dashboard(self):
         with self.client.get("/api/v1/users/me/", headers=self.headers, catch_response=True) as response:
-            if response.status_code in (200, 401):
+            if response.status_code in (200, 401, 403):
                 response.success()
             else:
                 response.failure(f"User me error: {response.status_code}")
@@ -260,7 +273,7 @@ class RisalaStudentUser(HttpUser):
     @task(3)
     def check_time_slots(self):
         with self.client.get("/api/v1/time-slots/", headers=self.headers, catch_response=True) as response:
-            if response.status_code in (200, 401, 404):
+            if response.status_code in (200, 401, 403, 404):
                 response.success()
             else:
                 response.failure(f"Time slots query error: {response.status_code}")
@@ -269,7 +282,7 @@ class RisalaStudentUser(HttpUser):
     @task(2)
     def check_notifications(self):
         with self.client.get("/api/v1/notifications/", headers=self.headers, catch_response=True) as response:
-            if response.status_code in (200, 401, 404):
+            if response.status_code in (200, 401, 403, 404):
                 response.success()
             else:
                 response.failure(f"Notifications error: {response.status_code}")
@@ -278,7 +291,7 @@ class RisalaStudentUser(HttpUser):
     @task(2)
     def view_enrollments(self):
         with self.client.get("/api/v1/enrollments/", headers=self.headers, catch_response=True) as response:
-            if response.status_code in (200, 401, 404):
+            if response.status_code in (200, 401, 403, 404):
                 response.success()
             else:
                 response.failure(f"Enrollments error: {response.status_code}")
@@ -287,7 +300,7 @@ class RisalaStudentUser(HttpUser):
     @task(1)
     def view_course_reviews(self):
         with self.client.get("/api/v1/course-reviews/", headers=self.headers, catch_response=True) as response:
-            if response.status_code in (200, 401, 404):
+            if response.status_code in (200, 401, 403, 404):
                 response.success()
             else:
                 response.failure(f"Course reviews error: {response.status_code}")
