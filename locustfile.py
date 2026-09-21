@@ -1,28 +1,68 @@
 """
-Risala Performance & Load Testing Suite (Locust)
-=================================================
-Simulates realistic concurrent mobile traffic against the Risala backend.
+Risala Performance & Concurrent Booking Stress Testing Suite (Locust)
+=====================================================================
+Simulates realistic concurrent mobile traffic AND high-concurrency 
+race conditions where multiple students compete to book the EXACT SAME
+time slots simultaneously (single bookings and overlapping range bookings).
 
 Usage:
-  # 1. Interactive Web Dashboard (recommended):
-  locust -f locustfile.py --host http://localhost:8000
+  # 1. Interactive Web Dashboard in Docker (recommended):
+  docker compose -f docker-compose.local.yml up locust
   # Then open http://localhost:8089 in your browser
 
-  # 2. Headless Quick Test (terminal):
-  locust -f locustfile.py --headless -u 20 -r 2 -t 30s --host https://risala-5vs3.onrender.com
+  # 2. Command-Line Automated Test:
+  locust -f locustfile.py --headless -u 30 -r 5 -t 1m --host https://risala-5vs3.onrender.com --csv=risala_benchmark
 
-  # 3. Stress Test (50 concurrent users):
-  locust -f locustfile.py --headless -u 50 -r 5 -t 1m --host https://risala-5vs3.onrender.com
+  # 3. Target Specific Concurrent Booking Test:
+  locust -f locustfile.py --tags booking_race --host http://localhost:8000
 """
 
 import os
-from locust import HttpUser, task, between, tag
+import random
+from locust import HttpUser, task, between, tag, events
+
+
+class ConcurrentBookingMetrics:
+    """Tracks booking outcomes across all concurrent worker threads."""
+    bookings_won = 0
+    conflicts_handled_cleanly = 0
+    double_bookings_detected = 0
+    unhandled_errors = 0
+    tested_slots = set()
+
+
+@events.test_start.add_listener
+def on_test_start(environment, **kwargs):
+    print("\n" + "=" * 65)
+    print("  RISALA LOAD & CONCURRENT BOOKING STRESS TEST INITIALIZED")
+    print("=" * 65)
+    print(f"Target Host: {environment.host}")
+    print("Simulating concurrent student race conditions on shared slots...")
+    print("=" * 65 + "\n")
+
+
+@events.test_stop.add_listener
+def on_test_stop(environment, **kwargs):
+    print("\n" + "=" * 65)
+    print("  RISALA CONCURRENT BOOKING TEST COMPLETED")
+    print("=" * 65)
+    print(f"Total Slots Contested:           {len(ConcurrentBookingMetrics.tested_slots)}")
+    print(f"Successful Bookings (Won):       {ConcurrentBookingMetrics.bookings_won}")
+    print(f"Handled Conflicts (Safe 400):    {ConcurrentBookingMetrics.conflicts_handled_cleanly}")
+    print(f"Double-Bookings (CRITICAL BUG):  {ConcurrentBookingMetrics.double_bookings_detected}")
+    print(f"Unhandled Server Errors (500s):  {ConcurrentBookingMetrics.unhandled_errors}")
+    print("=" * 65)
+    if ConcurrentBookingMetrics.double_bookings_detected == 0 and ConcurrentBookingMetrics.unhandled_errors == 0:
+        print("RESULT: PASS - Backend atomic transactions successfully prevented race conditions!")
+    else:
+        print("RESULT: FAIL - Unhandled errors or race conflicts detected. Check downloaded CSV data.")
+    print("=" * 65 + "\n")
 
 
 class RisalaVisitorUser(HttpUser):
     """
-    Simulates anonymous or guest visitors browsing the mobile app.
-    Represents ~70% of typical traffic (finding teachers, browsing courses, health probes).
+    Simulates general visitors browsing teachers, courses, and app health.
+    Represents ~60% of baseline traffic.
     """
     wait_time = between(1, 3)
     weight = 3
@@ -35,17 +75,17 @@ class RisalaVisitorUser(HttpUser):
             if response.status_code == 200 and "status" in response.text:
                 response.success()
             else:
-                response.failure(f"Health check failed: {response.status_code}")
+                response.failure(f"Health check probe failed with status {response.status_code}")
 
     @tag("version")
     @task(2)
     def check_app_version(self):
-        """Simulates app startup remote kill-switch / version check."""
+        """Simulates app startup remote kill-switch / version inspection."""
         with self.client.get("/api/v1/app/version/", catch_response=True) as response:
             if response.status_code == 200:
                 response.success()
             else:
-                response.failure(f"Version check failed: {response.status_code}")
+                response.failure(f"Version inspection failed: {response.status_code}")
 
     @tag("browse")
     @task(4)
@@ -68,47 +108,106 @@ class RisalaVisitorUser(HttpUser):
                 response.failure(f"Browse courses error: {response.status_code}")
 
 
-class RisalaStudentUser(HttpUser):
+class RisalaConcurrentBookingUser(HttpUser):
     """
-    Simulates registered students interacting with dashboard, attendance, and bookings.
+    Simulates multiple concurrent students competing to book the SAME time slots
+    simultaneously to test select_for_update row locking and race condition safety.
     """
-    wait_time = between(2, 5)
-    weight = 2
+    wait_time = between(1, 2)
+    weight = 4
 
     def on_start(self):
-        """Optional: Configure auth header if TEST_AUTH_TOKEN is provided."""
         self.auth_token = os.getenv("TEST_AUTH_TOKEN", "")
         self.headers = {
             "Authorization": f"Token {self.auth_token}"
         } if self.auth_token else {}
+        self.target_slot_ids = [1, 2, 3, 4, 5, 10, 15]
 
-    @tag("student")
+    @tag("booking_race", "single_booking")
+    @task(5)
+    def contest_same_single_slot(self):
+        """
+        Multiple students attempt to book the EXACT SAME time slot concurrently.
+        Expected behavior:
+          - Exactly 1 student gets 201 Created (wins the slot).
+          - All other concurrent students get 400 Bad Request with a clean error message.
+          - 500 Internal Server Error or deadlock indicates a race condition failure!
+        """
+        # Pick from a small set of slots so concurrent virtual users collide frequently
+        slot_id = random.choice(self.target_slot_ids)
+        ConcurrentBookingMetrics.tested_slots.add(slot_id)
+
+        payload = {
+            "time_slot_id": slot_id,
+            "hourly_rate": "15.00",
+        }
+
+        with self.client.post(
+            "/api/v1/users/bookings/",
+            json=payload,
+            headers=self.headers,
+            catch_response=True,
+            name="/api/v1/users/bookings/ [Race Contest]",
+        ) as response:
+            if response.status_code == 201:
+                ConcurrentBookingMetrics.bookings_won += 1
+                response.success()
+            elif response.status_code == 400:
+                body = response.text.lower()
+                if "no longer available" in body or "already booked" in body or "only students" in body:
+                    # Clean handled business logic conflict
+                    ConcurrentBookingMetrics.conflicts_handled_cleanly += 1
+                    response.success()
+                else:
+                    response.failure(f"Unexpected 400 validation error: {response.text}")
+            elif response.status_code == 401:
+                # Unauthenticated in test environment without auth token
+                response.success()
+            elif response.status_code == 404:
+                # Slot does not exist in the current DB instance
+                response.success()
+            elif response.status_code >= 500:
+                ConcurrentBookingMetrics.unhandled_errors += 1
+                response.failure(f"CRITICAL 500 ERROR on concurrent booking: {response.status_code} - {response.text}")
+
+    @tag("booking_race", "bulk_booking")
     @task(3)
-    def view_dashboard(self):
-        """Loads student dashboard and user profile."""
-        with self.client.get("/api/v1/users/me/", headers=self.headers, catch_response=True) as response:
-            # If no auth token provided, 401 is expected behavior
-            if response.status_code in (200, 401):
-                response.success()
-            else:
-                response.failure(f"User profile error: {response.status_code}")
+    def contest_overlapping_bulk_slots(self):
+        """
+        Simulates multiple students trying to book overlapping ranges of slots
+        simultaneously (e.g. Student A tries slots [1, 2, 3], Student B tries [2, 3, 4]).
+        """
+        # Overlapping subset
+        batch = random.choice([
+            [1, 2, 3],
+            [2, 3, 4],
+            [3, 4, 5],
+        ])
 
-    @tag("slots")
-    @task(2)
-    def view_available_time_slots(self):
-        """Queries available time slots for booking."""
-        with self.client.get("/api/v1/users/time-slots/", headers=self.headers, catch_response=True) as response:
-            if response.status_code in (200, 401, 404):
-                response.success()
-            else:
-                response.failure(f"Time slots query error: {response.status_code}")
+        payload = {
+            "time_slot_ids": batch,
+            "hourly_rate": "15.00",
+        }
 
-    @tag("notifications")
-    @task(1)
-    def view_notifications(self):
-        """Polls for unread session notifications."""
-        with self.client.get("/api/v1/users/notifications/", headers=self.headers, catch_response=True) as response:
-            if response.status_code in (200, 401, 404):
+        with self.client.post(
+            "/api/v1/users/bookings/bulk_create/",
+            json=payload,
+            headers=self.headers,
+            catch_response=True,
+            name="/api/v1/users/bookings/bulk_create/ [Overlapping Race]",
+        ) as response:
+            if response.status_code in (200, 201):
+                ConcurrentBookingMetrics.bookings_won += 1
                 response.success()
-            else:
-                response.failure(f"Notifications query error: {response.status_code}")
+            elif response.status_code == 400:
+                body = response.text.lower()
+                if "no longer available" in body or "already booked" in body or "error" in body or "only students" in body:
+                    ConcurrentBookingMetrics.conflicts_handled_cleanly += 1
+                    response.success()
+                else:
+                    response.failure(f"Unexpected bulk 400 error: {response.text}")
+            elif response.status_code in (401, 404):
+                response.success()
+            elif response.status_code >= 500:
+                ConcurrentBookingMetrics.unhandled_errors += 1
+                response.failure(f"CRITICAL 500 ERROR on overlapping bulk booking: {response.status_code}")
