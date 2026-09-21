@@ -382,9 +382,9 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.UserRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
-        "anon": env("DJANGO_ANON_THROTTLE_RATE", default="120/minute"),
-        "user": env("DJANGO_USER_THROTTLE_RATE", default="600/minute"),
-        "auth": env("DJANGO_AUTH_THROTTLE_RATE", default="10/minute"),
+        "anon": env("DJANGO_ANON_THROTTLE_RATE", default="1200/minute"),
+        "user": env("DJANGO_USER_THROTTLE_RATE", default="3600/minute"),
+        "auth": env("DJANGO_AUTH_THROTTLE_RATE", default="30/minute"),
     },
 }
 

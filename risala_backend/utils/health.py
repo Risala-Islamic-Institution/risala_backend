@@ -20,6 +20,7 @@ class HealthCheckView(APIView):
     """
     permission_classes = [AllowAny]
     authentication_classes = []
+    throttle_classes = []
 
     def get(self, request, *args, **kwargs):
         is_healthy = True
@@ -67,6 +68,7 @@ class AppVersionConfigView(APIView):
     """
     permission_classes = [AllowAny]
     authentication_classes = []
+    throttle_classes = []
 
     def get(self, request, *args, **kwargs):
         config = {

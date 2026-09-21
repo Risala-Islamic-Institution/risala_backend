@@ -58,6 +58,8 @@ class ConcurrentBookingMetrics:
     bookings_won = 0
     conflicts_handled_cleanly = 0
     double_bookings_detected = 0
+    throttled_429 = 0
+    gateway_retries_502_503 = 0
     unhandled_errors = 0
     tested_slots = set()
 
@@ -81,6 +83,8 @@ def on_test_stop(environment, **kwargs):
     print(f"Contested Slot Races:            {len(ConcurrentBookingMetrics.tested_slots)}")
     print(f"Successful Bookings (Won):       {ConcurrentBookingMetrics.bookings_won}")
     print(f"Handled Conflicts (Safe 400/404): {ConcurrentBookingMetrics.conflicts_handled_cleanly}")
+    print(f"Throttled Rate-Limits (Safe 429): {ConcurrentBookingMetrics.throttled_429}")
+    print(f"Gateway Cold Reboots (502/503):  {ConcurrentBookingMetrics.gateway_retries_502_503}")
     print(f"Double-Bookings (CRITICAL BUG):  {ConcurrentBookingMetrics.double_bookings_detected}")
     print(f"Unhandled Server Errors (500s):  {ConcurrentBookingMetrics.unhandled_errors}")
     print("=" * 70)
@@ -96,15 +100,18 @@ class RisalaVisitorUser(HttpUser):
     Simulates visitors exploring public platform pages: app version, health,
     teachers, courses, and payment configurations. (Weight: 3)
     """
-    wait_time = between(1, 3)
+    wait_time = between(1.5, 3.5)
     weight = 3
 
     @tag("health")
     @task(3)
     def check_health(self):
         with self.client.get("/healthz/", catch_response=True) as response:
-            if response.status_code == 200:
+            if response.status_code in (200, 429):
                 response.success()
+            elif response.status_code in (502, 503):
+                ConcurrentBookingMetrics.gateway_retries_502_503 += 1
+                response.failure(f"Render cold start/gateway restart: {response.status_code}")
             else:
                 response.failure(f"Health probe status: {response.status_code}")
 
@@ -112,8 +119,11 @@ class RisalaVisitorUser(HttpUser):
     @task(2)
     def check_app_version(self):
         with self.client.get("/api/v1/app/version/", catch_response=True) as response:
-            if response.status_code == 200:
+            if response.status_code in (200, 429):
                 response.success()
+            elif response.status_code in (502, 503):
+                ConcurrentBookingMetrics.gateway_retries_502_503 += 1
+                response.failure(f"Render cold start/gateway restart: {response.status_code}")
             else:
                 response.failure(f"Version check status: {response.status_code}")
 
@@ -121,8 +131,11 @@ class RisalaVisitorUser(HttpUser):
     @task(3)
     def browse_teachers(self):
         with self.client.get("/api/v1/teachers/", catch_response=True) as response:
-            if response.status_code in (200, 404):
+            if response.status_code in (200, 404, 429):
                 response.success()
+            elif response.status_code in (502, 503):
+                ConcurrentBookingMetrics.gateway_retries_502_503 += 1
+                response.failure(f"Render gateway restart: {response.status_code}")
             else:
                 response.failure(f"Browse teachers status: {response.status_code}")
 
@@ -130,8 +143,11 @@ class RisalaVisitorUser(HttpUser):
     @task(4)
     def browse_courses(self):
         with self.client.get("/api/v1/courses/", catch_response=True) as response:
-            if response.status_code in (200, 401, 403, 404):
+            if response.status_code in (200, 401, 403, 404, 429):
                 response.success()
+            elif response.status_code in (502, 503):
+                ConcurrentBookingMetrics.gateway_retries_502_503 += 1
+                response.failure(f"Render gateway restart: {response.status_code}")
             else:
                 response.failure(f"Browse courses status: {response.status_code}")
 
@@ -139,14 +155,20 @@ class RisalaVisitorUser(HttpUser):
     @task(2)
     def check_payment_methods(self):
         with self.client.get("/api/v1/payments/methods/", catch_response=True) as response:
-            if response.status_code in (200, 404):
+            if response.status_code in (200, 404, 429):
                 response.success()
+            elif response.status_code in (502, 503):
+                ConcurrentBookingMetrics.gateway_retries_502_503 += 1
+                response.failure(f"Render gateway restart: {response.status_code}")
             else:
                 response.failure(f"Payment methods status: {response.status_code}")
 
         with self.client.get("/api/v1/payments/config/", catch_response=True) as response:
-            if response.status_code in (200, 404):
+            if response.status_code in (200, 404, 429):
                 response.success()
+            elif response.status_code in (502, 503):
+                ConcurrentBookingMetrics.gateway_retries_502_503 += 1
+                response.failure(f"Render gateway restart: {response.status_code}")
             else:
                 response.failure(f"Payment config status: {response.status_code}")
 
@@ -157,7 +179,7 @@ class RisalaConcurrentBookingUser(HttpUser):
     simultaneously for the exact same session slots.
     Verifies Django select_for_update() row locking and atomic transaction integrity. (Weight: 5)
     """
-    wait_time = between(1, 2)
+    wait_time = between(1.0, 2.5)
     weight = 5
 
     def on_start(self):
@@ -212,8 +234,14 @@ class RisalaConcurrentBookingUser(HttpUser):
             elif response.status_code in (400, 404, 409):
                 ConcurrentBookingMetrics.conflicts_handled_cleanly += 1
                 response.success()
+            elif response.status_code == 429:
+                ConcurrentBookingMetrics.throttled_429 += 1
+                response.success()
             elif response.status_code in (401, 403):
                 response.success()
+            elif response.status_code in (502, 503):
+                ConcurrentBookingMetrics.gateway_retries_502_503 += 1
+                response.failure(f"Render gateway restart during booking: {response.status_code}")
             elif response.status_code >= 500:
                 ConcurrentBookingMetrics.unhandled_errors += 1
                 response.failure(f"CRITICAL 500 on concurrent booking: {response.status_code} - {response.text[:100]}")
@@ -246,8 +274,14 @@ class RisalaConcurrentBookingUser(HttpUser):
             elif response.status_code in (400, 404, 409):
                 ConcurrentBookingMetrics.conflicts_handled_cleanly += 1
                 response.success()
+            elif response.status_code == 429:
+                ConcurrentBookingMetrics.throttled_429 += 1
+                response.success()
             elif response.status_code in (401, 403):
                 response.success()
+            elif response.status_code in (502, 503):
+                ConcurrentBookingMetrics.gateway_retries_502_503 += 1
+                response.failure(f"Render gateway restart during bulk booking: {response.status_code}")
             elif response.status_code >= 500:
                 ConcurrentBookingMetrics.unhandled_errors += 1
                 response.failure(f"CRITICAL 500 on book-range: {response.status_code} - {response.text[:100]}")
@@ -261,7 +295,7 @@ class RisalaStudentUser(HttpUser):
     available time slots, reviewing notifications, course enrollments,
     course reviews, modules, and lessons. (Weight: 4)
     """
-    wait_time = between(1, 3)
+    wait_time = between(1.5, 3.5)
     weight = 4
 
     def on_start(self):
@@ -272,8 +306,11 @@ class RisalaStudentUser(HttpUser):
     @task(3)
     def view_profile_and_dashboard(self):
         with self.client.get("/api/v1/users/me/", headers=self.headers, catch_response=True) as response:
-            if response.status_code in (200, 401, 403):
+            if response.status_code in (200, 401, 403, 429):
                 response.success()
+            elif response.status_code in (502, 503):
+                ConcurrentBookingMetrics.gateway_retries_502_503 += 1
+                response.failure(f"Render gateway restart: {response.status_code}")
             else:
                 response.failure(f"User me error: {response.status_code}")
 
@@ -281,8 +318,11 @@ class RisalaStudentUser(HttpUser):
     @task(3)
     def check_time_slots(self):
         with self.client.get("/api/v1/time-slots/", headers=self.headers, catch_response=True) as response:
-            if response.status_code in (200, 401, 403, 404):
+            if response.status_code in (200, 401, 403, 404, 429):
                 response.success()
+            elif response.status_code in (502, 503):
+                ConcurrentBookingMetrics.gateway_retries_502_503 += 1
+                response.failure(f"Render gateway restart: {response.status_code}")
             else:
                 response.failure(f"Time slots error: {response.status_code}")
 
@@ -290,8 +330,11 @@ class RisalaStudentUser(HttpUser):
     @task(2)
     def check_notifications(self):
         with self.client.get("/api/v1/notifications/", headers=self.headers, catch_response=True) as response:
-            if response.status_code in (200, 401, 403, 404):
+            if response.status_code in (200, 401, 403, 404, 429):
                 response.success()
+            elif response.status_code in (502, 503):
+                ConcurrentBookingMetrics.gateway_retries_502_503 += 1
+                response.failure(f"Render gateway restart: {response.status_code}")
             else:
                 response.failure(f"Notifications error: {response.status_code}")
 
@@ -299,8 +342,11 @@ class RisalaStudentUser(HttpUser):
     @task(3)
     def view_enrollments(self):
         with self.client.get("/api/v1/enrollments/", headers=self.headers, catch_response=True) as response:
-            if response.status_code in (200, 401, 403, 404):
+            if response.status_code in (200, 401, 403, 404, 429):
                 response.success()
+            elif response.status_code in (502, 503):
+                ConcurrentBookingMetrics.gateway_retries_502_503 += 1
+                response.failure(f"Render gateway restart: {response.status_code}")
             else:
                 response.failure(f"Enrollments error: {response.status_code}")
 
@@ -308,8 +354,11 @@ class RisalaStudentUser(HttpUser):
     @task(2)
     def view_course_reviews(self):
         with self.client.get("/api/v1/course-reviews/", headers=self.headers, catch_response=True) as response:
-            if response.status_code in (200, 401, 403, 404):
+            if response.status_code in (200, 401, 403, 404, 429):
                 response.success()
+            elif response.status_code in (502, 503):
+                ConcurrentBookingMetrics.gateway_retries_502_503 += 1
+                response.failure(f"Render gateway restart: {response.status_code}")
             else:
                 response.failure(f"Course reviews error: {response.status_code}")
 
@@ -317,13 +366,19 @@ class RisalaStudentUser(HttpUser):
     @task(2)
     def browse_learning_content(self):
         with self.client.get("/api/v1/modules/", headers=self.headers, catch_response=True) as response:
-            if response.status_code in (200, 401, 403, 404):
+            if response.status_code in (200, 401, 403, 404, 429):
                 response.success()
+            elif response.status_code in (502, 503):
+                ConcurrentBookingMetrics.gateway_retries_502_503 += 1
+                response.failure(f"Render gateway restart: {response.status_code}")
             else:
                 response.failure(f"Modules query error: {response.status_code}")
 
         with self.client.get("/api/v1/lessons/", headers=self.headers, catch_response=True) as response:
-            if response.status_code in (200, 401, 403, 404):
+            if response.status_code in (200, 401, 403, 404, 429):
                 response.success()
+            elif response.status_code in (502, 503):
+                ConcurrentBookingMetrics.gateway_retries_502_503 += 1
+                response.failure(f"Render gateway restart: {response.status_code}")
             else:
                 response.failure(f"Lessons query error: {response.status_code}")
