@@ -152,6 +152,7 @@ dev = [
     "sphinx-rtd-theme",
     "watchfiles==1.1.1",
     "werkzeug[watchdog]==3.1.5",
+    "locust>=2.32.0",
 ]
 
 [project]
@@ -195,4 +196,5 @@ dependencies = [
     "uvicorn[standard]==0.40.0",
     "whitenoise==6.11.0",
     "django-storages[s3]",
+    "django-silk>=5.3.0",
 ]

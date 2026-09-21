@@ -94,3 +94,11 @@ services:
     command: npm run dev
     ports:
       - '3000:3000'
+
+  locust:
+    <<: *django
+    image: risala_backend_local_django
+    container_name: risala_backend_local_locust
+    ports:
+      - '8089:8089'
+    command: locust -f /app/locustfile.py --host http://django:8000
