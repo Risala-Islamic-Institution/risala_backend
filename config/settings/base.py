@@ -448,13 +448,14 @@ if SENTRY_DSN and (SENTRY_DSN.startswith("http://") or SENTRY_DSN.startswith("ht
             RedisIntegration(),
         ],
         environment=env("SENTRY_ENVIRONMENT", default="production"),
-        traces_sample_rate=env.float("SENTRY_TRACES_SAMPLE_RATE", default=1.0),
+        traces_sample_rate=env.float("SENTRY_TRACES_SAMPLE_RATE", default=0.2),
+        profiles_sample_rate=env.float("SENTRY_PROFILES_SAMPLE_RATE", default=0.2),
         send_default_pii=True,
     )
 
 # Silk Profiler (Deep SQL & Latency Profiling)
 # ------------------------------------------------------------------------------
-ENABLE_SILK = env.bool("ENABLE_SILK", default=False)
+ENABLE_SILK = env.bool("ENABLE_SILK", default=True)
 if ENABLE_SILK and "silk" not in INSTALLED_APPS:
     INSTALLED_APPS += ["silk"]
     MIDDLEWARE = ["silk.middleware.SilkyMiddleware", *MIDDLEWARE]
@@ -462,4 +463,7 @@ if ENABLE_SILK and "silk" not in INSTALLED_APPS:
     SILKY_INTERCEPT_PERCENT = env.int("SILKY_INTERCEPT_PERCENT", default=50)
     SILKY_AUTHENTICATION = True
     SILKY_AUTHORISATION = True
+    # Auto-prune profiles so database stays lean on free tier
+    SILKY_MAX_RECORDED_REQUESTS = 1000
+    SILKY_MAX_RECORDED_REQUESTS_CHECK_PERCENT = 10
 
