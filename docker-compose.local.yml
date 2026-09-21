@@ -96,9 +96,11 @@ services:
       - '3000:3000'
 
   locust:
-    <<: *django
-    image: risala_backend_local_django
+    image: locustio/locust:latest
     container_name: risala_backend_local_locust
     ports:
       - '8089:8089'
-    command: locust -f /app/locustfile.py --host http://django:8000
+    volumes:
+      - .:/mnt/locust
+    command: -f /mnt/locust/locustfile.py --host http://django:8000
+
