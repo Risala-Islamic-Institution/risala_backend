@@ -31,6 +31,16 @@ class ConcurrentBookingMetrics:
     tested_slots = set()
 
 
+@events.init_command_line_parser.add_listener
+def init_parser(parser):
+    parser.add_argument(
+        "--auth-token",
+        type=str,
+        default="",
+        help="Student Auth Token for testing authenticated booking endpoints",
+    )
+
+
 @events.test_start.add_listener
 def on_test_start(environment, **kwargs):
     print("\n" + "=" * 70)
