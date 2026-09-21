@@ -1,29 +1,64 @@
 # General
 # ------------------------------------------------------------------------------
-USE_DOCKER=yes
-IPYTHONDIR=/app/.ipython
-# Redis
+USE_DOCKER=
+IPYTHONDIR=
+DJANGO_SETTINGS_MODULE=
+DJANGO_SECRET_KEY=
+DJANGO_ADMIN_URL=
+DJANGO_ALLOWED_HOSTS=
+DJANGO_READ_DOT_ENV_FILE=
+
+# Redis & Caches
 # ------------------------------------------------------------------------------
-REDIS_URL=redis://redis:6379/0
+REDIS_URL=
 
-# Celery
+# Celery & Flower
 # ------------------------------------------------------------------------------
+CELERY_FLOWER_USER=
+CELERY_FLOWER_PASSWORD=
 
-# Flower
-CELERY_FLOWER_USER=debug
-CELERY_FLOWER_PASSWORD=debug
-
-#Payments
+# Silk Profiler (Deep SQL & Latency Profiling)
 # ------------------------------------------------------------------------------
-PAYMENT_PROVIDER_DEFAULT=stripe
-PAYMENT_DEFAULT_CURRENCY=usd
+ENABLE_SILK=
+SILKY_INTERCEPT_PERCENT=
+SILKY_AUTHENTICATION=
+SILKY_AUTHORISATION=
+SILKY_MAX_RECORDED_REQUESTS=
 
-STRIPE_SECRET_KEY=sk_test_REPLACE_ME
-STRIPE_WEBHOOK_SECRET=whsec_REPLACE_ME
-
-STRIPE_SUCCESS_URL=http://localhost:3333/dashboard/student?session_id={CHECKOUT_SESSION_ID}
-STRIPE_CANCEL_URL=http://localhost:3333/dashboard/student?payment=cancelled
-
-# SHEGERPAY
+# Sentry APM & Error Tracking
 # ------------------------------------------------------------------------------
-# SHEGERPAY_API_KEY=sk_test_REPLACE_ME
+SENTRY_DSN=
+SENTRY_ENVIRONMENT=
+SENTRY_TRACES_SAMPLE_RATE=
+SENTRY_PROFILES_SAMPLE_RATE=
+DJANGO_SENTRY_LOG_LEVEL=
+
+# DRF Rate Limiting & Throttling
+# ------------------------------------------------------------------------------
+DJANGO_ANON_THROTTLE_RATE=
+DJANGO_USER_THROTTLE_RATE=
+DJANGO_AUTH_THROTTLE_RATE=
+
+# Remote Mobile App Version Control & Kill-Switch
+# ------------------------------------------------------------------------------
+MOBILE_APP_LATEST_VERSION=
+MOBILE_APP_MIN_VERSION=
+MOBILE_APP_RELEASE_NOTES=
+MOBILE_APP_FORCE_UPDATE=
+MOBILE_APP_DOWNLOAD_URL=
+
+# Payments (Stripe & ShegerPay)
+# ------------------------------------------------------------------------------
+PAYMENT_PROVIDER_DEFAULT=
+PAYMENT_DEFAULT_CURRENCY=
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+STRIPE_SUCCESS_URL=
+STRIPE_CANCEL_URL=
+SHEGERPAY_API_KEY=
+
+# Locust Load Testing & Benchmark Student Credentials
+# ------------------------------------------------------------------------------
+STUDENT_EMAIL=
+STUDENT_PASSWORD=
+TEST_AUTH_TOKEN=
