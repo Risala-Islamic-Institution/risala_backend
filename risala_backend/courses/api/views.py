@@ -8,6 +8,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from risala_backend.courses.models import Course, CourseModule, Lesson, Enrollment
 from django.db.models import Q
 from risala_backend.courses.api.serializers import (
+    CourseListSerializer,
     CourseSerializer,
     CourseModuleSerializer,
     LessonSerializer,
@@ -34,11 +35,16 @@ class CourseViewSet(ListModelMixin, RetrieveModelMixin, CreateModelMixin, Update
             return [AllowAny()]
         return [IsAuthenticated()]
 
+    def get_serializer_class(self):
+        if self.action == "list":
+            return CourseListSerializer
+        return CourseSerializer
+
     def get_queryset(self):
         user = self.request.user
-        qs = Course.objects.all().select_related("created_by__user").prefetch_related(
-            "modules", "modules__lessons"
-        )
+        qs = Course.objects.all().select_related("created_by__user")
+        if self.action != "list":
+            qs = qs.prefetch_related("modules", "modules__lessons")
         teacher_profile = getattr(user, "teacher_profile", None)
         student_profile = getattr(user, "student_profile", None)
 
@@ -152,9 +158,7 @@ class EnrollmentViewSet(ListModelMixin, RetrieveModelMixin, CreateModelMixin, Up
 
     def get_queryset(self):
         user = self.request.user
-        base_qs = Enrollment.objects.prefetch_related(
-            "course__modules", "course__modules__lessons"
-        )
+        base_qs = Enrollment.objects.all()
         if hasattr(user, "student_profile"):
             return base_qs.filter(student=user.student_profile).select_related(
                 "course", "course__created_by__user"

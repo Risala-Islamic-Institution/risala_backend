@@ -54,6 +54,65 @@ class CourseModuleSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "lessons"]
 
 
+class CourseListSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for course catalog listings and student enrollments."""
+    created_by = serializers.SerializerMethodField()
+    thumbnail = serializers.SerializerMethodField()
+    modules = serializers.SerializerMethodField()
+
+    def get_modules(self, obj):
+        return []
+
+    def get_created_by(self, obj):
+        try:
+            if obj.created_by and hasattr(obj.created_by, "user") and obj.created_by.user:
+                u = obj.created_by.user
+                return {
+                    "id": str(u.id),
+                    "username": u.username,
+                    "full_name": u.full_name or u.username,
+                    "email": u.email,
+                    "primary_role": "USTAZ",
+                }
+        except Exception:
+            pass
+        return None
+
+    def get_thumbnail(self, obj):
+        if not obj.thumbnail:
+            return None
+        try:
+            url = obj.thumbnail.url
+            request = self.context.get("request")
+            if request is not None:
+                return request.build_absolute_uri(url)
+            return url
+        except Exception:
+            return str(obj.thumbnail)
+
+    class Meta:
+        model = Course
+        fields = [
+            "id",
+            "title",
+            "slug",
+            "description",
+            "category",
+            "level",
+            "duration_type",
+            "total_weeks",
+            "syllabus",
+            "prerequisites",
+            "created_by",
+            "thumbnail",
+            "is_published",
+            "price",
+            "modules",
+            "created_at",
+        ]
+        read_only_fields = ["id", "slug", "created_by", "modules", "created_at"]
+
+
 class CourseSerializer(serializers.ModelSerializer):
     created_by = serializers.SerializerMethodField()
     thumbnail = serializers.SerializerMethodField()
@@ -120,12 +179,12 @@ class CourseSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         teacher_profile = getattr(request.user, "teacher_profile", None) if request else None
         if not teacher_profile or instance.created_by != teacher_profile:
-            raise serializers.ValidationError("Only the owner teacher can update this course.")
+            raise serializers.ValidationError("Only the course creator can update this course.")
         return super().update(instance, validated_data)
 
 
 class EnrollmentSerializer(serializers.ModelSerializer):
-    course = CourseSerializer(read_only=True)
+    course = CourseListSerializer(read_only=True)
     course_id = serializers.PrimaryKeyRelatedField(
         queryset=Course.objects.filter(is_published=True), source="course", write_only=True
     )
