@@ -119,7 +119,7 @@ REST_AUTH = {
 if ENABLE_SILK and "silk" not in INSTALLED_APPS:
     INSTALLED_APPS += ["silk"]
     MIDDLEWARE = ["silk.middleware.SilkyMiddleware", *MIDDLEWARE]
-    SILKY_PYTHON_PROFILER = True
+    SILKY_PYTHON_PROFILER = False
     SILKY_INTERCEPT_PERCENT = 100
 
 
