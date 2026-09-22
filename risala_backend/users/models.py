@@ -137,13 +137,28 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel, UUIDModel):
         """Get URL for user's detail view."""
         return reverse("users:detail", kwargs={"username": self.username})
 
+    def _get_role_names(self) -> set:
+        """Fetch and cache user role names in-memory for the lifetime of this User instance."""
+        if not hasattr(self, "_cached_role_names"):
+            if hasattr(self, "_prefetched_objects_cache") and "roles" in self._prefetched_objects_cache:
+                self._cached_role_names = {r.name for r in self.roles.all()}
+            else:
+                self._cached_role_names = set(self.roles.values_list("name", flat=True))
+        return self._cached_role_names
+
     def has_role(self, role_name: str) -> bool:
-        """Check if user has a specific role."""
-        return self.roles.filter(name=role_name).exists()
+        """Check if user has a specific role (cached in-memory per request)."""
+        return role_name in self._get_role_names()
 
     def get_primary_role(self):
-        """Get the user's primary (first) role."""
-        return self.roles.first()
+        """Get the user's primary (first) role (cached in-memory per request)."""
+        if not hasattr(self, "_cached_primary_role"):
+            if hasattr(self, "_prefetched_objects_cache") and "roles" in self._prefetched_objects_cache:
+                roles = list(self.roles.all())
+                self._cached_primary_role = roles[0] if roles else None
+            else:
+                self._cached_primary_role = self.roles.first()
+        return self._cached_primary_role
 
 
 class UserRole(TimeStampedModel, UUIDModel):

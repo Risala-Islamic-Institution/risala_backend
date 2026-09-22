@@ -44,7 +44,8 @@ CSRF_TRUSTED_ORIGINS = env.list(
 
 # DATABASES
 # ------------------------------------------------------------------------------
-DATABASES["default"]["CONN_MAX_AGE"] = env.int("CONN_MAX_AGE", default=60)
+DATABASES["default"]["CONN_MAX_AGE"] = env.int("CONN_MAX_AGE", default=300)
+DATABASES["default"]["CONN_HEALTH_CHECKS"] = env.bool("CONN_HEALTH_CHECKS", default=True)
 
 # CACHES
 # ------------------------------------------------------------------------------

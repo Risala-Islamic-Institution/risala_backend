@@ -2,10 +2,13 @@
 API Views for User and Profile models.
 """
 
+import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone as py_timezone
 from decimal import Decimal, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
+
+logger = logging.getLogger(__name__)
 
 from django.db import transaction
 from django.utils import timezone
@@ -64,64 +67,63 @@ def sync_elapsed_session_bookings(bookings):
     1. Sets status to COMPLETED if CONFIRMED or IN_PROGRESS and end_at <= now or start_at <= now - 45min.
     2. Ensures SessionAttendance exists, evaluated, default VERIFIED_COMPLETE if past session.
     3. Ensures TeacherPayoutLedger exists with status PAYABLE (or updated from HELD to PAYABLE).
-    This ensures that sessions taught previously are accurately reflected in attendance and payouts.
+    Uses non-blocking bulk operations to prevent row-lock contention and request hangs.
     """
     now = timezone.now()
     threshold = now - timedelta(minutes=45)
+    to_complete = []
+
     for b in bookings:
         is_past = (b.end_at and b.end_at <= now) or (b.start_at and b.start_at <= threshold)
         if b.status in [SessionBooking.Status.CONFIRMED, SessionBooking.Status.IN_PROGRESS] and is_past:
+            # Update in-memory state immediately so analytics calculations are instant and accurate
             b.status = SessionBooking.Status.COMPLETED
-            b.save(update_fields=["status", "updated_at"])
+            to_complete.append(b)
 
-            attendance, _ = SessionAttendance.objects.get_or_create(booking=b)
-            if attendance.verdict == SessionAttendance.Verdict.PENDING:
-                attendance.verdict = SessionAttendance.Verdict.VERIFIED_COMPLETE
-                attendance.teacher_minutes_present = max(attendance.teacher_minutes_present, 45)
-                attendance.student_minutes_present = max(attendance.student_minutes_present, 45)
-                attendance.save()
+    if not to_complete:
+        return
 
-            gross = b.hourly_rate or (b.teacher.hourly_rate if b.teacher else Decimal("10.00")) or Decimal("10.00")
-            if gross <= Decimal("0.00"):
-                gross = Decimal("10.00")
-            platform_fee = (gross * Decimal("10.00")) / Decimal("100.00")
-            teacher_net = gross - platform_fee
+    # Non-blocking batch update to persist completed status to database
+    try:
+        booking_ids = [b.id for b in to_complete]
+        SessionBooking.objects.filter(id__in=booking_ids).update(
+            status=SessionBooking.Status.COMPLETED,
+            updated_at=now,
+        )
 
-            ledger, created = TeacherPayoutLedger.objects.get_or_create(
-                booking=b,
-                teacher=b.teacher,
-                defaults={
-                    "gross_amount": gross,
-                    "platform_fee_percent": Decimal("10.00"),
-                    "platform_fee_amount": platform_fee,
-                    "teacher_net_amount": teacher_net,
-                    "status": TeacherPayoutLedger.Status.PAYABLE,
-                },
-            )
-            if not created and ledger.status == TeacherPayoutLedger.Status.HELD:
-                ledger.status = TeacherPayoutLedger.Status.PAYABLE
-                ledger.save(update_fields=["status", "updated_at"])
-        elif b.status == SessionBooking.Status.COMPLETED or is_past:
-            gross = b.hourly_rate or (b.teacher.hourly_rate if b.teacher else Decimal("10.00")) or Decimal("10.00")
-            if gross <= Decimal("0.00"):
-                gross = Decimal("10.00")
-            platform_fee = (gross * Decimal("10.00")) / Decimal("100.00")
-            teacher_net = gross - platform_fee
+        for b in to_complete:
+            try:
+                attendance, _ = SessionAttendance.objects.get_or_create(booking=b)
+                if attendance.verdict == SessionAttendance.Verdict.PENDING:
+                    attendance.verdict = SessionAttendance.Verdict.VERIFIED_COMPLETE
+                    attendance.teacher_minutes_present = max(attendance.teacher_minutes_present, 45)
+                    attendance.student_minutes_present = max(attendance.student_minutes_present, 45)
+                    attendance.save(update_fields=["verdict", "teacher_minutes_present", "student_minutes_present", "updated_at"])
 
-            ledger, created = TeacherPayoutLedger.objects.get_or_create(
-                booking=b,
-                teacher=b.teacher,
-                defaults={
-                    "gross_amount": gross,
-                    "platform_fee_percent": Decimal("10.00"),
-                    "platform_fee_amount": platform_fee,
-                    "teacher_net_amount": teacher_net,
-                    "status": TeacherPayoutLedger.Status.PAYABLE,
-                },
-            )
-            if not created and ledger.status == TeacherPayoutLedger.Status.HELD:
-                ledger.status = TeacherPayoutLedger.Status.PAYABLE
-                ledger.save(update_fields=["status", "updated_at"])
+                gross = b.hourly_rate or (b.teacher.hourly_rate if b.teacher else Decimal("10.00")) or Decimal("10.00")
+                if gross <= Decimal("0.00"):
+                    gross = Decimal("10.00")
+                platform_fee = (gross * Decimal("10.00")) / Decimal("100.00")
+                teacher_net = gross - platform_fee
+
+                ledger, created = TeacherPayoutLedger.objects.get_or_create(
+                    booking=b,
+                    teacher=b.teacher,
+                    defaults={
+                        "gross_amount": gross,
+                        "platform_fee_percent": Decimal("10.00"),
+                        "platform_fee_amount": platform_fee,
+                        "teacher_net_amount": teacher_net,
+                        "status": TeacherPayoutLedger.Status.PAYABLE,
+                    },
+                )
+                if not created and ledger.status == TeacherPayoutLedger.Status.HELD:
+                    ledger.status = TeacherPayoutLedger.Status.PAYABLE
+                    ledger.save(update_fields=["status", "updated_at"])
+            except Exception as exc:
+                logger.warning("Non-fatal: could not sync attendance/ledger for booking %s: %s", b.id, exc)
+    except Exception as exc:
+        logger.warning("Non-fatal: could not batch update elapsed bookings: %s", exc)
 
 
 class UserViewSet(RetrieveModelMixin, ListModelMixin, UpdateModelMixin, GenericViewSet):

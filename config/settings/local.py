@@ -117,11 +117,16 @@ REST_AUTH = {
 # Silk Profiler (Deep SQL & Latency Profiling for Local Development)
 # ------------------------------------------------------------------------------
 ENABLE_SILK = env.bool("ENABLE_SILK", default=False)
-if ENABLE_SILK and "silk" not in INSTALLED_APPS:
-    INSTALLED_APPS += ["silk"]
-    MIDDLEWARE = ["silk.middleware.SilkyMiddleware", *MIDDLEWARE]
-    SILKY_PYTHON_PROFILER = False
-    SILKY_INTERCEPT_PERCENT = 100
+if ENABLE_SILK:
+    try:
+        import silk  # noqa: F401
+        if "silk" not in INSTALLED_APPS:
+            INSTALLED_APPS += ["silk"]
+            MIDDLEWARE = ["silk.middleware.SilkyMiddleware", *MIDDLEWARE]
+            SILKY_PYTHON_PROFILER = False
+            SILKY_INTERCEPT_PERCENT = 100
+    except ImportError:
+        ENABLE_SILK = False
 
 
 
