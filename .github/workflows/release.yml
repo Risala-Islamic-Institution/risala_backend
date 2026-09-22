@@ -1,0 +1,57 @@
+name: Backend Release Tag & Docker Publish
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  release:
+    name: Build Release & Push Tagged Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Extract Release Tag Version
+        id: tag
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: env.DOCKER_AVAILABLE == 'true'
+        env:
+          DOCKER_AVAILABLE: ${{ secrets.DOCKERHUB_TOKEN != '' || secrets.DOCKERHUB_PASSWORD != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME || 'seud' }}
+          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKERHUB_PASSWORD }}
+
+      - name: Build and Push Tagged Docker Image
+        if: env.DOCKER_AVAILABLE == 'true'
+        env:
+          DOCKER_AVAILABLE: ${{ secrets.DOCKERHUB_TOKEN != '' || secrets.DOCKERHUB_PASSWORD != '' }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./compose/production/django/Dockerfile
+          push: true
+          tags: |
+            seud/risala_backend:${{ steps.tag.outputs.VERSION }}
+            seud/risala_backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create GitHub Release Notes
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Backend Release ${{ steps.tag.outputs.VERSION }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false

@@ -1,0 +1,52 @@
+name: 🐛 Bug Report
+description: Report an error, performance issue, or unexpected behavior in the backend
+title: "[BUG]: "
+labels: ["bug", "backend"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue with the Risala backend!
+  - type: input
+    id: endpoint
+    attributes:
+      label: API Endpoint / Component
+      description: What endpoint or feature failed? (e.g. `/api/v1/bookings/book-range/`)
+      placeholder: /api/v1/...
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem Description
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce the behavior?
+      placeholder: |
+        1. Call POST /api/v1/...
+        2. With payload ...
+        3. See error ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs or Sentry Trace
+      description: Paste any tracebacks, Sentry transaction IDs, or error responses.
+      render: shell
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Critical (Production crash / Data corruption)
+        - High (Core feature blocked, e.g. booking or payment)
+        - Medium (Minor feature degraded)
+        - Low (Cosmetic / Warning only)
+    validations:
+      required: true
