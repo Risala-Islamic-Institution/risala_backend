@@ -689,12 +689,13 @@ class SessionBookingViewSet(
         booking = self.get_object()
 
         # Only the owning student can cancel
+        student_profile = getattr(request.user, "student_profile", None)
         if (
-            not hasattr(request.user, "student_profile")
-            or booking.student != request.user.student_profile
+            not student_profile
+            or (booking.student != student_profile and getattr(booking.student, "user", None) != request.user)
         ):
             return Response(
-                {"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN
+                {"detail": "Not allowed. This is not your booking."}, status=status.HTTP_403_FORBIDDEN
             )
 
         if booking.status == SessionBooking.Status.CANCELLED:
@@ -710,6 +711,16 @@ class SessionBookingViewSet(
         if booking.start_at <= timezone.now():
             return Response(
                 {"detail": "Cannot cancel a booking that has started or passed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Enforce 30-minute lockout rule
+        now = timezone.now()
+        if booking.start_at - now < timedelta(minutes=30):
+            return Response(
+                {
+                    "detail": "Cannot cancel a session within 30 minutes of its start time. Please contact your teacher directly."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -730,6 +741,104 @@ class SessionBookingViewSet(
                 body=f"A booking on {booking.start_at} was cancelled by the student.",
                 related_booking=booking,
             )
+        serializer = self.get_serializer(booking)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="postpone")
+    def postpone(self, request, pk=None):
+        booking = self.get_object()
+
+        # Only the owning student can postpone
+        student_profile = getattr(request.user, "student_profile", None)
+        if (
+            not student_profile
+            or (booking.student != student_profile and getattr(booking.student, "user", None) != request.user)
+        ):
+            return Response(
+                {"detail": "Not allowed. This is not your booking."}, status=status.HTTP_403_FORBIDDEN
+            )
+
+        if booking.status in [
+            SessionBooking.Status.CANCELLED,
+            SessionBooking.Status.DECLINED,
+            SessionBooking.Status.EXPIRED,
+            SessionBooking.Status.COMPLETED,
+        ]:
+            return Response(
+                {"detail": f"Cannot postpone a session with status {booking.status}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        now = timezone.now()
+        if booking.start_at - now < timedelta(minutes=30):
+            return Response(
+                {
+                    "detail": "Cannot postpone a session within 30 minutes of its start time. Please contact your teacher directly."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        new_time_slot_id = request.data.get("new_time_slot_id")
+        if not new_time_slot_id:
+            return Response(
+                {"detail": "new_time_slot_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            new_slot = TimeSlot.objects.select_for_update().get(
+                id=new_time_slot_id,
+                teacher=booking.teacher,
+            )
+        except (TimeSlot.DoesNotExist, ValueError):
+            return Response(
+                {"detail": "Target time slot not found for this teacher."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if new_slot.is_booked:
+            return Response(
+                {"detail": "Target time slot is already booked."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if new_slot.start_at <= now:
+            return Response(
+                {"detail": "Cannot postpone to a time slot that has already passed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            # Release previous slot
+            if hasattr(booking, "time_slot") and booking.time_slot:
+                old_slot = booking.time_slot
+                old_slot.is_booked = False
+                old_slot.booking = None
+                old_slot.save(update_fields=["is_booked", "booking", "updated_at"])
+
+            # Lock in new slot
+            new_slot.is_booked = True
+            new_slot.booking = booking
+            new_slot.save(update_fields=["is_booked", "booking", "updated_at"])
+
+            old_start = booking.start_at
+            booking.start_at = new_slot.start_at
+            booking.end_at = new_slot.end_at
+            booking.status = SessionBooking.Status.POSTPONED
+            booking.save(update_fields=["start_at", "end_at", "status", "updated_at"])
+
+            teacher_user = getattr(booking.teacher, "user", None)
+            if teacher_user:
+                time_str = booking.start_at.strftime("%b %d, %Y at %H:%M")
+                old_time_str = old_start.strftime("%b %d, %Y at %H:%M")
+                student_name = request.user.get_full_name() or request.user.email
+                Notification.objects.create(
+                    user=teacher_user,
+                    title="Session Postponed",
+                    body=f"Student {student_name} has postponed their session from {old_time_str} to {time_str}.",
+                    related_booking=booking,
+                )
+
         serializer = self.get_serializer(booking)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -1122,9 +1231,13 @@ class SessionBookingViewSet(
         if not (teacher_profile and booking.teacher == teacher_profile) and not is_admin:
             return Response({"detail": "Only the assigned teacher or admin can start a session."}, status=status.HTTP_403_FORBIDDEN)
 
-        if booking.status not in {SessionBooking.Status.CONFIRMED, SessionBooking.Status.IN_PROGRESS}:
+        if booking.status not in {
+            SessionBooking.Status.CONFIRMED,
+            SessionBooking.Status.IN_PROGRESS,
+            SessionBooking.Status.POSTPONED,
+        }:
             return Response(
-                {"detail": "Only confirmed sessions can be started."},
+                {"detail": "Only confirmed or scheduled sessions can be started."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1187,8 +1300,8 @@ class SessionBookingViewSet(
         booking = self.get_object()
         user = request.user
 
-        is_teacher = hasattr(user, "teacher_profile") and booking.teacher_id == user.teacher_profile.id
-        is_student = hasattr(user, "student_profile") and booking.student_id == user.student_profile.id
+        is_teacher = (hasattr(user, "teacher_profile") and booking.teacher_id == user.teacher_profile.id) or (getattr(booking, "teacher", None) and getattr(booking.teacher, "user_id", None) == user.id)
+        is_student = (hasattr(user, "student_profile") and booking.student_id == user.student_profile.id) or (getattr(booking, "student", None) and getattr(booking.student, "user_id", None) == user.id)
         is_admin = getattr(user, "is_staff", False) or getattr(user, "is_superuser", False) or (hasattr(user, "has_role") and user.has_role("ADMIN"))
 
         if not (is_teacher or is_student or is_admin):

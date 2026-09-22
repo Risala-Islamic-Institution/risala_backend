@@ -464,6 +464,7 @@ class SessionBooking(TimeStampedModel, UUIDModel):
         DECLINED = "DECLINED", _("Declined")
         EXPIRED = "EXPIRED", _("Expired")
         CANCELLED = "CANCELLED", _("Cancelled")
+        POSTPONED = "POSTPONED", _("Postponed")
         IN_PROGRESS = "IN_PROGRESS", _("In Progress")
         COMPLETED = "COMPLETED", _("Completed")
 
