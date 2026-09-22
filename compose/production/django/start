@@ -13,4 +13,17 @@ python /app/manage.py setup_admin || true
 
 python /app/manage.py collectstatic --noinput
 
-exec gunicorn config.asgi --bind "0.0.0.0:${PORT:-5000}" --chdir=/app -k uvicorn_worker.UvicornWorker --workers "${WEB_CONCURRENCY:-2}" --timeout 120
+# Render shared nodes automatically inject WEB_CONCURRENCY=4, which exceeds the 512MB
+# limit of starter/free instances and triggers an Out-Of-Memory kill.
+# Default to 1 worker so memory remains safely below 150MB. When more RAM is provisioned,
+# operators can set GUNICORN_WORKERS in Render to scale up workers seamlessly.
+WORKERS="${GUNICORN_WORKERS:-1}"
+
+exec gunicorn config.asgi \
+    --bind "0.0.0.0:${PORT:-5000}" \
+    --chdir=/app \
+    -k uvicorn_worker.UvicornWorker \
+    --workers "${WORKERS}" \
+    --max-requests 1000 \
+    --max-requests-jitter 50 \
+    --timeout 120
