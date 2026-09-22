@@ -4,7 +4,10 @@ High-performance authentication classes with lightweight in-memory caching.
 
 import logging
 from django.core.cache import cache
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
 from rest_framework.authentication import TokenAuthentication
+from rest_framework.authtoken.models import Token
 
 logger = logging.getLogger(__name__)
 
@@ -31,3 +34,12 @@ class CachedTokenAuthentication(TokenAuthentication):
         except Exception as exc:
             logger.debug("Could not cache user token credentials: %s", exc)
         return (user, token)
+
+
+@receiver(post_delete, sender=Token)
+def invalidate_token_cache_on_logout(sender, instance, **kwargs):
+    """Instantly remove token from cache upon logout so revocation is immediate."""
+    try:
+        cache.delete(f"token_auth_user:{instance.key}")
+    except Exception as exc:
+        logger.debug("Could not invalidate token cache: %s", exc)
