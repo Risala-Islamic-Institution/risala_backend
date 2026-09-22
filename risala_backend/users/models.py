@@ -264,9 +264,11 @@ class TeacherProfile(TimeStampedModel, UUIDModel):
         verbose_name_plural = "Teacher Profiles"
 
     def compute_total_students(self):
-        """Compute the distinct number of students associated with this teacher (cached for 10 minutes)."""
+        """Compute the distinct number of students associated with this teacher (cached in-memory for 10 min)."""
         cache_key = f"teacher_computed_students:{self.id}"
-        cached = cache.get(cache_key)
+        from django.core.cache import caches
+        mem_cache = caches["auth_tokens"] if "auth_tokens" in caches else cache
+        cached = mem_cache.get(cache_key)
         if cached is not None:
             return cached
 
@@ -300,7 +302,7 @@ class TeacherProfile(TimeStampedModel, UUIDModel):
 
         computed = max(len(student_ids), self.total_students or 0)
         try:
-            cache.set(cache_key, computed, timeout=600)
+            mem_cache.set(cache_key, computed, timeout=600)
         except Exception:
             pass
         return computed
