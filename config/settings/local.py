@@ -28,6 +28,10 @@ CACHES = {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
         "LOCATION": "drf-throttles",
     },
+    "auth_tokens": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "drf-auth-tokens",
+    },
 }
 
 # EMAIL

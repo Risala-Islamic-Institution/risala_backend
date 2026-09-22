@@ -55,14 +55,22 @@ CACHES = {
         "LOCATION": REDIS_URL,
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
-            # Mimicking memcache behavior.
-            # https://github.com/jazzband/django-redis#memcached-exceptions-behavior
             "IGNORE_EXCEPTIONS": True,
+            "SOCKET_CONNECT_TIMEOUT": 3,
+            "SOCKET_TIMEOUT": 3,
+            "CONNECTION_POOL_KWARGS": {
+                "max_connections": 20,
+                "timeout": 3,
+            },
         },
     },
     "throttles": {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
         "LOCATION": "drf-throttles",
+    },
+    "auth_tokens": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "drf-auth-tokens",
     },
 }
 
