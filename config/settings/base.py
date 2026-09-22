@@ -453,18 +453,3 @@ if SENTRY_DSN and (SENTRY_DSN.startswith("http://") or SENTRY_DSN.startswith("ht
         send_default_pii=True,
     )
 
-# Silk Profiler (Deep SQL & Latency Profiling)
-# ------------------------------------------------------------------------------
-ENABLE_SILK = env.bool("ENABLE_SILK", default=False)
-if ENABLE_SILK and "silk" not in INSTALLED_APPS:
-    INSTALLED_APPS += ["silk"]
-    MIDDLEWARE = ["silk.middleware.SilkyMiddleware", *MIDDLEWARE]
-    # Set to False to avoid PEP 669 tool 2 conflict with Sentry APM profiler in Python 3.13
-    SILKY_PYTHON_PROFILER = env.bool("SILKY_PYTHON_PROFILER", default=False)
-    SILKY_INTERCEPT_PERCENT = env.int("SILKY_INTERCEPT_PERCENT", default=50)
-    SILKY_AUTHENTICATION = True
-    SILKY_AUTHORISATION = True
-    # Auto-prune profiles so database stays lean on free tier
-    SILKY_MAX_RECORDED_REQUESTS = 1000
-    SILKY_MAX_RECORDED_REQUESTS_CHECK_PERCENT = 10
-

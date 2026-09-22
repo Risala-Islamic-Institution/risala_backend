@@ -114,8 +114,9 @@ REST_AUTH = {
     "USER_DETAILS_SERIALIZER": "risala_backend.users.api.serializers.UserSerializer",
 }
 
-# Silk Profiler (Deep SQL & Latency Profiling)
+# Silk Profiler (Deep SQL & Latency Profiling for Local Development)
 # ------------------------------------------------------------------------------
+ENABLE_SILK = env.bool("ENABLE_SILK", default=False)
 if ENABLE_SILK and "silk" not in INSTALLED_APPS:
     INSTALLED_APPS += ["silk"]
     MIDDLEWARE = ["silk.middleware.SilkyMiddleware", *MIDDLEWARE]

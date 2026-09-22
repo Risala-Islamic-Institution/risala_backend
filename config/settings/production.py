@@ -267,5 +267,11 @@ CORS_ALLOWED_ORIGINS = [
 SPECTACULAR_SETTINGS["SERVERS"] = [
     {"url": "https://risala.app.aletcloud.com", "description": "Production server"},
 ]
-# Your stuff...
+
+# Silk Profiler Guard
 # ------------------------------------------------------------------------------
+# Silk is strictly for local development profiling; never load in production
+# to prevent PEP 669 Python 3.13 profiler collisions and memory bloat.
+if "silk" in INSTALLED_APPS:
+    INSTALLED_APPS.remove("silk")
+MIDDLEWARE = [m for m in MIDDLEWARE if not m.startswith("silk.")]
