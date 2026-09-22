@@ -341,8 +341,7 @@ class TeacherProfileViewSet(
         return [IsAuthenticated()]
 
     def get_queryset(self):
-        """Show all visible teacher profiles for browsing."""
-        queryset = TeacherProfile.objects.filter(profile_visibility=True).select_related("user")
+        queryset = TeacherProfile.objects.filter(profile_visibility=True).select_related("user").prefetch_related("user__roles")
 
         # Filter by specialization
         specialization = self.request.query_params.get("specialization")

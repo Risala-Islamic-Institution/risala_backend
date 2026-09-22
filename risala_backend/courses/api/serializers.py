@@ -62,7 +62,14 @@ class CourseSerializer(serializers.ModelSerializer):
     def get_created_by(self, obj):
         try:
             if obj.created_by and hasattr(obj.created_by, "user") and obj.created_by.user:
-                return UserSerializer(obj.created_by.user).data
+                u = obj.created_by.user
+                return {
+                    "id": str(u.id),
+                    "username": u.username,
+                    "full_name": u.full_name or u.username,
+                    "email": u.email,
+                    "primary_role": "USTAZ",
+                }
         except Exception:
             pass
         return None

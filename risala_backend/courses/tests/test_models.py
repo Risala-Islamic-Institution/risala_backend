@@ -23,7 +23,7 @@ class TestCourseModel:
             title="Foundations of Fiqh",
             description="Learn the fundamentals of Islamic jurisprudence.",
             created_by=teacher_profile,
-            category=Course.Category.FIQH,
+            category="FIQH",
             level=Course.Level.BEGINNER
         )
         assert course.title == "Foundations of Fiqh"

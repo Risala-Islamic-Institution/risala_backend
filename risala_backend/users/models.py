@@ -7,6 +7,7 @@ from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.db import models
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from django.core.cache import cache
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -263,7 +264,12 @@ class TeacherProfile(TimeStampedModel, UUIDModel):
         verbose_name_plural = "Teacher Profiles"
 
     def compute_total_students(self):
-        """Compute the distinct number of students associated with this teacher via bookings, orders, or course enrollments."""
+        """Compute the distinct number of students associated with this teacher (cached for 10 minutes)."""
+        cache_key = f"teacher_computed_students:{self.id}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         student_ids = set()
         try:
             session_students = self.session_bookings.exclude(
@@ -292,8 +298,12 @@ class TeacherProfile(TimeStampedModel, UUIDModel):
         except Exception:
             pass
 
-        computed = len(student_ids)
-        return max(computed, self.total_students or 0)
+        computed = max(len(student_ids), self.total_students or 0)
+        try:
+            cache.set(cache_key, computed, timeout=600)
+        except Exception:
+            pass
+        return computed
 
     def __str__(self):
         return f"Teacher: {self.user.full_name or self.user.username}"
