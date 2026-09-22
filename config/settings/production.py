@@ -60,7 +60,6 @@ CACHES = {
             "SOCKET_TIMEOUT": 3,
             "CONNECTION_POOL_KWARGS": {
                 "max_connections": 20,
-                "timeout": 3,
             },
         },
     },
