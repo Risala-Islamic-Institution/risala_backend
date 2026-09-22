@@ -60,6 +60,10 @@ CACHES = {
             "IGNORE_EXCEPTIONS": True,
         },
     },
+    "throttles": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "drf-throttles",
+    },
 }
 
 # SECURITY

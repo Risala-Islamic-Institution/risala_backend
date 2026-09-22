@@ -369,7 +369,7 @@ SOCIALACCOUNT_FORMS = {"signup": "risala_backend.users.forms.UserSocialSignupFor
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework.authentication.SessionAuthentication",
-        "rest_framework.authentication.TokenAuthentication",
+        "risala_backend.users.authentication.CachedTokenAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
@@ -378,8 +378,8 @@ REST_FRAMEWORK = {
     "ALLOWED_VERSIONS": ["v1"],
     "VERSION_PARAM": "version",
     "DEFAULT_THROTTLE_CLASSES": [
-        "rest_framework.throttling.AnonRateThrottle",
-        "rest_framework.throttling.UserRateThrottle",
+        "risala_backend.users.throttling.FastAnonRateThrottle",
+        "risala_backend.users.throttling.FastUserRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
         "anon": env("DJANGO_ANON_THROTTLE_RATE", default="1200/minute"),
