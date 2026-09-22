@@ -59,30 +59,28 @@ jobs:
       - name: Create Local Environment Files for CI
         run: |
           mkdir -p .envs/.local
-          cat << 'EOF' > .envs/.local/.django
-          USE_DOCKER=yes
-          IPYTHONDIR=/app/.ipython
-          DJANGO_SETTINGS_MODULE=config.settings.local
-          DJANGO_SECRET_KEY=ci-local-testing-secret-key-123456789
-          DJANGO_ADMIN_URL=admin/
-          DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0,django
-          DJANGO_READ_DOT_ENV_FILE=False
-          REDIS_URL=redis://redis:6379/0
-          CELERY_FLOWER_USER=debug
-          CELERY_FLOWER_PASSWORD=debug
-          ENABLE_SILK=false
-          PAYMENT_PROVIDER_DEFAULT=stripe
-          PAYMENT_DEFAULT_CURRENCY=usd
-          EOF
+          printf '%s\n' \
+            "USE_DOCKER=yes" \
+            "IPYTHONDIR=/app/.ipython" \
+            "DJANGO_SETTINGS_MODULE=config.settings.local" \
+            "DJANGO_SECRET_KEY=ci-local-testing-secret-key-123456789" \
+            "DJANGO_ADMIN_URL=admin/" \
+            "DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0,django" \
+            "DJANGO_READ_DOT_ENV_FILE=False" \
+            "REDIS_URL=redis://redis:6379/0" \
+            "CELERY_FLOWER_USER=debug" \
+            "CELERY_FLOWER_PASSWORD=debug" \
+            "ENABLE_SILK=false" \
+            "PAYMENT_PROVIDER_DEFAULT=stripe" \
+            "PAYMENT_DEFAULT_CURRENCY=usd" > .envs/.local/.django
           if [ ! -f .envs/.local/.postgres ]; then
-            cat << 'EOF' > .envs/.local/.postgres
-            POSTGRES_HOST=postgres
-            POSTGRES_PORT=5432
-            POSTGRES_DB=risala_backend
-            POSTGRES_USER=debug
-            POSTGRES_PASSWORD=debug
-            DATABASE_URL=postgres://debug:debug@postgres:5432/risala_backend
-            EOF
+            printf '%s\n' \
+              "POSTGRES_HOST=postgres" \
+              "POSTGRES_PORT=5432" \
+              "POSTGRES_DB=risala_backend" \
+              "POSTGRES_USER=debug" \
+              "POSTGRES_PASSWORD=debug" \
+              "DATABASE_URL=postgres://debug:debug@postgres:5432/risala_backend" > .envs/.local/.postgres
           fi
 
       - name: Build Django Local Image
