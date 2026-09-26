@@ -1,0 +1,57 @@
+# ==============================================================================
+# Render Blueprint Specification (Infrastructure-as-Code)
+# Project: Risala Backend
+# Environments: Production (master) & Staging (staging)
+# Note: Zero paid databases configured. Both environments connect directly
+# to external Supabase PostgreSQL instances via DATABASE_URL.
+# ==============================================================================
+services:
+  # ── PRODUCTION SERVICE ──────────────────────────────────────────────────────
+  - type: web
+    name: risala-backend-production
+    runtime: image
+    image:
+      url: docker.io/seud/risala_backend:latest
+    plan: free
+    healthCheckPath: /healthz/
+    autoDeploy: true
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DJANGO_ALLOWED_HOSTS
+        value: "risala-5vs3.onrender.com,risala-backend-production.onrender.com,.onrender.com,localhost,127.0.0.1"
+      - key: DJANGO_CSRF_TRUSTED_ORIGINS
+        value: "https://risala-5vs3.onrender.com,https://risala-backend-production.onrender.com,https://*.onrender.com"
+      - key: DATABASE_URL
+        sync: false # Configured in Render Dashboard with Supabase Production connection string
+      - key: REDIS_URL
+        sync: false # Optional: Upstash Redis (free tier) or left unset
+      - key: GUNICORN_WORKERS
+        value: "1" # Keeps RAM usage below 150MB to prevent Render 512MB OOM kills
+
+  # ── STAGING SERVICE ─────────────────────────────────────────────────────────
+  - type: web
+    name: risala-backend-staging
+    runtime: image
+    image:
+      url: docker.io/seud/risala_backend:staging
+    plan: free
+    healthCheckPath: /healthz/
+    autoDeploy: true
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DJANGO_ALLOWED_HOSTS
+        value: "risala-backend-staging.onrender.com,.onrender.com,localhost,127.0.0.1"
+      - key: DJANGO_CSRF_TRUSTED_ORIGINS
+        value: "https://risala-backend-staging.onrender.com,https://*.onrender.com"
+      - key: DATABASE_URL
+        sync: false # Configured in Render Dashboard with Supabase Staging connection string
+      - key: REDIS_URL
+        sync: false
+      - key: GUNICORN_WORKERS
+        value: "1"

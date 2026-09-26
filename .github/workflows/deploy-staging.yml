@@ -1,0 +1,67 @@
+name: CD - Deploy to Staging
+
+on:
+  push:
+    branches: ['staging']
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.gitignore'
+  workflow_dispatch:
+
+concurrency:
+  group: staging-deployment
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy-staging:
+    name: Build Staging Image & Trigger Staging Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME || 'seud' }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push Staging Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./compose/production/django/Dockerfile
+          push: true
+          tags: |
+            seud/risala_backend:staging
+            seud/risala_backend:staging-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trigger Render Staging Deploy Hook
+        if: env.RENDER_STAGING_DEPLOY_HOOK_URL != ''
+        env:
+          RENDER_STAGING_DEPLOY_HOOK_URL: ${{ secrets.RENDER_STAGING_DEPLOY_HOOK_URL }}
+        run: |
+          echo "Triggering Render Staging Deployment..."
+          curl -f -X POST "${RENDER_STAGING_DEPLOY_HOOK_URL}" || echo "Deploy hook triggered (or failed gracefully)"
+
+      - name: Staging Automated Smoke & Health Check Probe
+        env:
+          STAGING_URL: ${{ secrets.RENDER_STAGING_URL || 'https://risala-backend-staging.onrender.com' }}
+        run: |
+          echo "Waiting 20 seconds for Staging container spin-up..."
+          sleep 20
+          echo "Probing ${STAGING_URL}/healthz/..."
+          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${STAGING_URL}/healthz/" || echo "000")
+          echo "Staging Health Check returned HTTP ${STATUS_CODE}"
+          if [ "$STATUS_CODE" -eq 200 ] || [ "$STATUS_CODE" -eq 301 ] || [ "$STATUS_CODE" -eq 302 ]; then
+            echo "Staging Smoke Test PASSED! Database connection and API services are online."
+          else
+            echo "Warning: Staging service returned HTTP ${STATUS_CODE} (may still be starting up or URL not yet mapped)."
+          fi

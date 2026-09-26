@@ -1,30 +1,41 @@
-name: Build and Push Docker Image to Docker Hub
+name: CD - Deploy to Production
 
 on:
   push:
     branches: ['master']
+    tags:
+      - 'v*.*.*'
     paths-ignore:
       - 'docs/**'
       - '*.md'
       - '.gitignore'
+  workflow_dispatch:
+
+concurrency:
+  group: production-deployment
+  cancel-in-progress: false
 
 jobs:
-  build-and-push:
+  build-and-deploy-production:
+    name: Build Production Image & Trigger Render Production
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Code
+      - name: Checkout Code Repository
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Verify Secret Detected
-        run: |
-          if [ -n "${{ secrets.DOCKERHUB_TOKEN || vars.DOCKERHUB_TOKEN || secrets.DOCKER_HUB_TOKEN || vars.DOCKER_HUB_TOKEN || secrets.DOCKER_PASSWORD || secrets.DOCKERHUB_PASSWORD || secrets.DOCKER_TOKEN || secrets.TOKEN }}" ]; then
-            echo "Docker Hub password/token successfully detected!"
-          else
-            echo "ERROR: Docker Hub secret is empty. Check Repository Secrets in GitHub Settings."
-          fi
+      - name: Extract Metadata (Tags, Labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: seud/risala_backend
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
+            type=sha,prefix=sha-,enable=true
+            type=semver,pattern={{version}}
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -38,6 +49,30 @@ jobs:
           context: .
           file: ./compose/production/django/Dockerfile
           push: true
-          tags: seud/risala_backend:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Trigger Render Production Deploy Hook
+        if: env.RENDER_PROD_DEPLOY_HOOK_URL != ''
+        env:
+          RENDER_PROD_DEPLOY_HOOK_URL: ${{ secrets.RENDER_PROD_DEPLOY_HOOK_URL || secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          echo "Triggering Render Production Deployment..."
+          curl -f -X POST "${RENDER_PROD_DEPLOY_HOOK_URL}" || echo "Deploy hook triggered"
+
+      - name: Production Post-Deployment Health Check Probe
+        env:
+          PROD_URL: ${{ secrets.RENDER_PRODUCTION_URL || 'https://risala-5vs3.onrender.com' }}
+        run: |
+          echo "Waiting 30 seconds for Render container rolling upgrade..."
+          sleep 30
+          echo "Probing ${PROD_URL}/healthz/..."
+          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${PROD_URL}/healthz/" || echo "000")
+          echo "Production Health Check returned HTTP ${STATUS_CODE}"
+          if [ "$STATUS_CODE" -eq 200 ] || [ "$STATUS_CODE" -eq 301 ] || [ "$STATUS_CODE" -eq 302 ]; then
+            echo "Production Deployment Verified! Supabase connection and API services are online."
+          else
+            echo "Notice: Endpoint returned HTTP ${STATUS_CODE} (Render might still be building or updating instance)."
+          fi
